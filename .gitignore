@@ -1,0 +1,8 @@
+/CoNIC-docker-template
+/test
+/tiles
+/.ipynb_checkpoints
+checkpoint_step_300000
+*.pyc
+*.dat
+*.txt
