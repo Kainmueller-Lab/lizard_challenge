@@ -20,17 +20,17 @@ from src.multi_head_unet import UnetDecoder, MultiHeadModel
 from src.spatial_augmenter import SpatialAugmenter
 from src.train_utils import supervised_train_step, validation, save_snapshot, save_model, make_cpvs
 from src.data_utils import SliceDataset, CropDataset, color_augmentations, add_3c_gt
-import torch_optimizer as optim
+#import torch_optimizer as optim
 
 torch.backends.cudnn.benchmark = True
 
 torch.manual_seed(42)
 
 params = {
-    'data_path': '/fast/AG_Kainmueller/jrumber/data/lizard/tiles',
-    'experiment' : 'exp_0_MH_3c',
+    'data_path': 'tiles',
+    'experiment' : 'uniform_MH_attention',
     'batch_size': 8,
-    'training_steps':300000,
+    'training_steps':400000,
     'in_channels': 3,
     'num_fmaps': 32,
     'fmap_inc_factors': 2,
@@ -40,7 +40,7 @@ params = {
     'padding': 'same',
     'activation': 'ReLU',
     'weight_decay': 1e-4,
-    'learning_rate': 1e-3,
+    'learning_rate': 5e-4,
     'seed': 42,
     'num_validation': 500,
     'cutout_prob':0.0,
@@ -53,7 +53,8 @@ params = {
     'validation_step' : 500,
     'snapshot_step' : 5000,
     'checkpoint_step': 20000,
-    'instance_seg': 'embedding' # 'embedding' or 'cpv_3c' 
+    'instance_seg': 'cpv_3c', # 'embedding' or 'cpv_3c'
+    'attention': True
     }
 
 aug_params_fast = {
@@ -74,6 +75,7 @@ os.makedirs(writer_dir,exist_ok=True)
 writer = SummaryWriter(writer_dir)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+print(device)
 params['device'] = device
 params['aug_params_fast'] = aug_params_fast
 with open(os.path.join(params['experiment'], 'params.toml'), 'w') as f:
@@ -92,6 +94,7 @@ if 'tiles' in params['data_path']:
     Y_val = lab_dat[-params['num_validation']:]
     # add gt_3c
     if params['instance_seg'] == 'cpv_3c':
+        print('Add 3c labels')
         Y_train = add_3c_gt(Y_train)
         Y_val = add_3c_gt(Y_val)
     labeled_dataset = SliceDataset(raw=X_train, labels=Y_train)
@@ -159,14 +162,16 @@ if params['pretrained_model']:
                     n_blocks=5,
                     use_batchnorm=True,
                     center=False,
-                    attention_type=None).to(device)
+                    attention_type='scse' if params['attention'] else None
+                    ).to(device)
         decoder_ct = UnetDecoder(
                     encoder_channels=encoder.out_channels,
                     decoder_channels=decoder_channels,
                     n_blocks=5,
                     use_batchnorm=True,
                     center=False,
-                    attention_type=None).to(device)
+                    attention_type='scse' if params['attention'] else None
+                    ).to(device)
         head_inst = smp.base.SegmentationHead(
                     in_channels=decoder_channels[-1],
                     out_channels=5,
@@ -232,11 +237,11 @@ elif params['optimizer'] == 'AdamW':
                                   lr=params['learning_rate'],
                                   weight_decay=params['weight_decay'])
 
-elif params['optimizer'] == 'AdaBound':
-    optimizer = optim.AdaBound(model.parameters(),
-                               lr=params['learning_rate'],
-                               final_lr = 1e-5,
-                               weight_decay=params['weight_decay'])
+# elif params['optimizer'] == 'AdaBound':
+#     optimizer = optim.AdaBound(model.parameters(),
+#                                lr=params['learning_rate'],
+#                                final_lr = 1e-5,
+#                                weight_decay=params['weight_decay'])
 
 #lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=params['training_steps'], eta_min=1e-5)
 fast_aug = SpatialAugmenter(aug_params_fast)#, padding_mode='reflection')
@@ -338,5 +343,5 @@ def supervised_training(params):
                 save_model(step, model, optimizer, loss, os.path.join(log_dir,"checkpoint_step_"+str(step)))    
 
 
-if __name__ == '__main__':
-    supervised_training(params)
+#if __name__ == '__main__':
+supervised_training(params)

@@ -116,6 +116,58 @@ def supervised_train_step(model, raw, gt, fast_aug, color_aug_fn, cutout_fn, cut
 #         loss += inpaint_loss
     return loss, pred_inst, pred_class.softmax(1),img_caug, gt_inst, gt_ct, cutout_maps
 
+def semantic_seg_train_step(model, raw, gt, fast_aug, color_aug_fn, class_lossfn, writer, device, step):
+    raw = raw.to(device).float()
+    raw = raw + raw.min() *-1
+    raw /= raw.max()
+    gt = gt.to(device).float()
+    B,_,_,_ = raw.shape
+    raw_list = []
+    gt_ct_list = []
+    for b in range(B):
+        img = raw[b].permute(2,0,1).unsqueeze(0) # BHWC -> BCHW
+        gt_ = gt[b].permute(2,0,1).unsqueeze(0) # BHW2 -> B2HW
+        img_saug, gt_saug = fast_aug.forward_transform(img, gt_)                
+        gt_ct = gt_saug[:,1]
+        img_caug = color_aug_fn(img_saug)
+        raw_list.append(img_caug)
+        gt_ct_list.append(gt_ct)
+    img_caug = torch.cat(raw_list, axis = 0)
+    gt_ct = torch.cat(gt_ct_list, axis = 0)
+    out_fast = model(img_caug)
+    _,_,H,W = out_fast.shape
+    gt_ct = center_crop(gt_ct.unsqueeze(0), H, W)
+    pred_class = out_fast
+    class_loss = class_lossfn(pred_class, gt_ct.long())
+    if torch.isnan(class_loss) or not torch.isfinite(class_loss):
+        class_loss = torch.tensor(0.0)
+    class_loss = class_loss
+    writer.add_scalar('class_loss', class_loss, step)
+    print('loss', class_loss.item())
+    return class_loss, pred_class.softmax(1),img_caug, gt_ct
+
+def semantic_seg_validation(model, validation_dataloader, class_lossfn, device, step, writer):
+    val_loss = []
+    for raw, gt in validation_dataloader:
+        raw = raw.to(device)
+        raw = raw.float() + raw.min() *-1
+        raw /= raw.max()
+        gt = gt.to(device)
+        raw = raw.permute(0,3,1,2) # BHWC -> BCHW
+        gt = gt.permute(0,3,1,2) # BHW2 -> B2HW
+        with torch.no_grad():
+            out = model(raw)
+            b,c,h,w = out.shape
+            gt = center_crop(gt, h, w)
+            gt_ct = gt[:,1]
+            pred_class = out
+            class_loss = class_lossfn(pred_class, gt_ct.unsqueeze(0).long())
+            val_loss.append(class_loss.item())
+        val_new = np.mean(val_loss)
+        writer.add_scalar('val_loss', val_new, step)
+        print('Validation loss: ', val_new)
+        return val_new
+
 def save_snapshot(log_dir, out_dict, step):
     print('Save training snapshot')
     with h5py.File(os.path.join(log_dir,'snap_step_'+str(step)),'w') as f:
