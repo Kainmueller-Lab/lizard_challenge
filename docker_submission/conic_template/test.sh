@@ -1,8 +1,8 @@
 
 # ! USER SPECIFIC
 # <<<<<<<<<<<<<<<<<<<<<<<<<
-LOCAL_INPUT="/home/buzzwoll/CoNIC/local_test/mha"
-LOCAL_OUTPUT="/home/buzzwoll/CoNIC/local_test/output"
+LOCAL_INPUT="/home/buzzwoll/lizard_challenge/docker_submission/local_test/mha"
+LOCAL_OUTPUT="/home/buzzwoll/lizard_challenge/docker_submission/local_test/output"
 # >>>>>>>>>>>>>>>>>>>>>>>>>
 
 # ! DO NOT MODIFY IF YOU ARE NOT CLEAR ABOUT DOCKER ENGINE

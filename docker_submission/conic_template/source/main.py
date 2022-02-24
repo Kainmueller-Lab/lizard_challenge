@@ -4,11 +4,13 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from .spatial_augmenter import SpatialAugmenter
-from .data_utils import SliceDataset, make_pseudolabel, make_instance_segmentation, make_ct
+from .data_utils import SliceDataset, make_pseudolabel, make_instance_segmentation, make_ct, instance_wise_connected_components, remove_big_objects,remove_holes
 from tqdm.auto import tqdm
 from .utils import print_dir, recur_find_ext, save_as_json
 from .multi_head_unet import *
 import segmentation_models_pytorch as smp
+
+from skimage.morphology import remove_small_objects
 
 def run(
         input_dir: str,
@@ -50,7 +52,8 @@ def run(
     np.save("images.npy", images)
     # >>>>>>>>>>>>>>>>>>>>>>>>>
     params = {'fg_thresh': 0.7,
-              'seed_thresh': 0.5,
+              'seed_thresh': 0.3,
+              'best_obj_removal': 25
     }
     
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -139,6 +142,10 @@ def run(
 
     for pred_3c, pred_class in tqdm(zip(pred_emb_list, pred_class_list)):
         pred_inst, _ = make_instance_segmentation(pred_3c, fg_thresh=params['fg_thresh'], seed_thresh=params['seed_thresh'])
+        pred_inst = remove_big_objects(pred_inst, size=5000)
+        pred_inst = remove_holes(pred_inst, max_hole_size=50)
+        pred_inst = instance_wise_connected_components(pred_inst)
+        pred_inst = remove_small_objects(pred_inst, int(params['best_obj_removal']))
         pred_inst = torch.tensor(pred_inst.astype(np.int32)).long()
         pred_ct, pred_reg = make_ct(pred_class, pred_inst)
         for key in pred_regression.keys():

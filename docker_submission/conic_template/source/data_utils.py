@@ -1,9 +1,12 @@
 from torch.utils.data import Dataset
 import numpy as np
 import mahotas
-from scipy.ndimage import label
+import scipy
 import logging
 import torch
+
+from skimage.measure import label
+from skimage.morphology import remove_small_holes
 
 def normalize_percentile(x, pmin=3, pmax=99.8, axis=None, clip=False,
                          eps=1e-8, dtype=np.float32):
@@ -69,7 +72,7 @@ def make_instance_segmentation(prediction, fg_thresh=0.9, seed_thresh=0.9):
     fg = 1.0 * ((1.0 - prediction[0, ...]) > fg_thresh)
     ws_surface = 1.0 - prediction[1, ...]
     seeds = (1 * (prediction[1, ...] > seed_thresh)).astype(np.uint8)
-    markers, cnt = label(seeds)
+    markers, cnt = scipy.ndimage.label(seeds)
     labelling = watershed(ws_surface, markers, fg)
     return labelling, ws_surface
 
@@ -135,3 +138,43 @@ def make_ct(pred_class, instance_map):
         "connective-tissue-cell": ct_list[6],
     }
     return pred_ct, pred_reg
+
+
+
+def instance_wise_connected_components(pred_inst, connectivity=2):
+    out = np.zeros_like(pred_inst)
+    i = np.max(pred_inst)
+    for j in np.unique(pred_inst):
+        if j ==0:
+            continue
+        relabeled = label(pred_inst==j, background=0, connectivity=connectivity)
+        first = True
+        for new_lab in np.unique(relabeled):
+            if new_lab == 0:
+                continue
+            if first:
+                out[relabeled==new_lab] = j
+                first = False
+            if np.sum(relabeled==new_lab)>40:
+                out[relabeled==new_lab] = i
+                i += 1
+            else:
+                out[relabeled==new_lab] = j
+    return out
+
+def remove_big_objects(pred_inst, size):
+    for i in np.unique(pred_inst):
+        if i == 0:
+            continue
+        if np.sum(pred_inst==i)>size:
+            print('Remove instance '+str(i)+' of size '+str(np.sum(pred_inst==i)))
+            pred_inst[pred_inst==i] = 0
+    return pred_inst
+
+def remove_holes(pred_inst, max_hole_size):
+    out = np.zeros_like(pred_inst)
+    for i in np.unique(pred_inst):
+        if i == 0:
+            continue
+        out += remove_small_holes(pred_inst==i, max_hole_size)*i
+    return out
