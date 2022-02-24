@@ -268,30 +268,30 @@ def fix_mirror_padding(ann):
     return ann   
 
 # you need to install this as well, there is no pypi package, go here instead: https://github.com/zsef123/Connected_components_PyTorch
-from cc_torch import connected_components_labeling
+# from cc_torch import connected_components_labeling
 
-def fix_mirror_padding_gpu(inp):
-    """Deal with duplicated instances due to mirroring in interpolation
-    during shape augmentation (scale, rotation etc.).
-    Gpu version
+# def fix_mirror_padding_gpu(inp):
+#     """Deal with duplicated instances due to mirroring in interpolation
+#     during shape augmentation (scale, rotation etc.).
+#     Gpu version
 
-    code is for [H,W] tensor
-    """
+#     code is for [H,W] tensor
+#     """
     
-    inp = inp.to('cuda')
-    cur_max = inp.max()
-    # real gain would be if we knew which area we have to search for duplicates -> if we can get a mask from spatial augmenter for this maybe?
-    for i in inp.unique()[1:]:
-        inst_map = connected_components_labeling((inp==i).byte())
-        inst_map_vals = inst_map.unique()
-        if inst_map_vals.shape[0]==2:
-            continue
-        else:
-            cnt = 0
-            for n,v in enumerate(inst_map_vals[1:]):
-                inp[inst_map==v] += cur_max+cnt
-                cnt+=1
-    return inp
+#     inp = inp.to('cuda')
+#     cur_max = inp.max()
+#     # real gain would be if we knew which area we have to search for duplicates -> if we can get a mask from spatial augmenter for this maybe?
+#     for i in inp.unique()[1:]:
+#         inst_map = connected_components_labeling((inp==i).byte())
+#         inst_map_vals = inst_map.unique()
+#         if inst_map_vals.shape[0]==2:
+#             continue
+#         else:
+#             cnt = 0
+#             for n,v in enumerate(inst_map_vals[1:]):
+#                 inp[inst_map==v] += cur_max+cnt
+#                 cnt+=1
+#     return inp
 
 # Test code for comparing speeds:
 
