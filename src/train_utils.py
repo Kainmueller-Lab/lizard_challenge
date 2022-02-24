@@ -267,6 +267,9 @@ def fix_mirror_padding(ann):
         current_max_id = np.amax(ann)
     return ann   
 
+# you need to install this as well, there is no pypi package, go here instead: https://github.com/zsef123/Connected_components_PyTorch
+from cc_torch import connected_components_labeling
+
 def fix_mirror_padding_gpu(inp):
     """Deal with duplicated instances due to mirroring in interpolation
     during shape augmentation (scale, rotation etc.).
