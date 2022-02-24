@@ -9,7 +9,7 @@ import numpy as np
 
 # this needs spams, spams in turn needs  sudo apt-get -y install libblas-dev liblapack-dev gfortran
 import spams
-
+import torch
 
 def get_foreground(image: np.ndarray, luminance_threshold: float = 0.8):
     """Get tissue area (foreground)
@@ -167,3 +167,16 @@ def stain_mixup(
     augmented_image = od_to_rgb(augmented_concentration @ interpolated_stain_matrix)
     return augmented_image
 
+def torch_stain_mixup(raw, source_stain, target_stain, intensity_range=[0.95,1.05], alpha=.6):
+    #expecting BCHW
+    device = raw.device
+    raw = raw.permute(0,2,3,1).cpu().numpy()
+    out = []
+    for im in raw:
+        out.append(stain_mixup(im, source_stain, target_stain, intensity_range, alpha))
+    return torch.Tensor(np.stack(out)).to(device)
+
+
+
+# stain_train = get_stain_matrix_multi(X_train)
+# stain_val = get_stain_matrix_multi(X_val)
