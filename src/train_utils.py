@@ -6,6 +6,7 @@ import os
 import numpy as np
 from scipy.ndimage import measurements
 
+from .stain_mix import *
 
 def save_model(step, model, optimizer, loss, filename):
     torch.save({
@@ -45,6 +46,40 @@ def make_pseudolabel(raw, model, n_views, slow_aug):
     out = torch.cat(out_list, dim=0)
     mask = torch.cat(mask_list, dim=0)
     return out, mask
+
+
+def make_pseudolabel_wstain(raw, model, n_views, slow_aug, source_stain, target_stain):
+    B,C,H,w = raw.shape
+    mask_list = []
+    out_list = []
+    for b in range(B): 
+        tmp_out_list = []
+        tmp_mask_list = []
+        for _ in range(n_views):
+            # gen views
+            slow_aug.interpolation='bilinear'
+            raw = torch_stain_mixup(raw[b].unsqueeze(0), source_stain, target_stain, intensity_range=[0.95,1.05], alpha=.6)           
+            view = slow_aug.forward_transform(raw[b].unsqueeze(0))
+            with torch.no_grad():
+                out = model(view)
+                out = out[...,4:-4,4:-4]
+            mask = torch.ones_like(out[:,-1:,:,:])
+            slow_aug.interpolation='nearest'
+            out_inv, aug_mask_inv = slow_aug.inverse_transform(out, mask)
+            tmp_out_list.append(out_inv*aug_mask_inv)
+            tmp_mask_list.append(aug_mask_inv)
+        out_slow = torch.stack(tmp_out_list).sum(0) # 1 x 3 x H x W
+        mask_slow = torch.stack(tmp_mask_list).sum(0) > 0 # 1 x 1 x H x W
+        n_out = torch.stack(tmp_mask_list).sum(0)
+        out_slow = mask_slow*out_slow/(n_out+1e-6)
+        out_slow = F.pad(out_slow, (4,4,4,4))
+        mask_slow = F.pad(mask_slow, (4,4,4,4))
+        out_list.append(out_slow)
+        mask_list.append(mask_slow)
+    out = torch.cat(out_list, dim=0)
+    mask = torch.cat(mask_list, dim=0)
+    return out, mask
+
 
 def supervised_train_step(model, raw, gt, fast_aug, color_aug_fn, cutout_fn, cutout_prob, inst_lossfn, class_lossfn, writer, device, step):
     raw = raw.to(device).float()
@@ -268,30 +303,30 @@ def fix_mirror_padding(ann):
     return ann   
 
 # you need to install this as well, there is no pypi package, go here instead: https://github.com/zsef123/Connected_components_PyTorch
-# from cc_torch import connected_components_labeling
+from cc_torch import connected_components_labeling
 
-# def fix_mirror_padding_gpu(inp):
-#     """Deal with duplicated instances due to mirroring in interpolation
-#     during shape augmentation (scale, rotation etc.).
-#     Gpu version
+def fix_mirror_padding_gpu(inp):
+    """Deal with duplicated instances due to mirroring in interpolation
+    during shape augmentation (scale, rotation etc.).
+    Gpu version
 
-#     code is for [H,W] tensor
-#     """
+    code is for [H,W] tensor
+    """
     
-#     inp = inp.to('cuda')
-#     cur_max = inp.max()
-#     # real gain would be if we knew which area we have to search for duplicates -> if we can get a mask from spatial augmenter for this maybe?
-#     for i in inp.unique()[1:]:
-#         inst_map = connected_components_labeling((inp==i).byte())
-#         inst_map_vals = inst_map.unique()
-#         if inst_map_vals.shape[0]==2:
-#             continue
-#         else:
-#             cnt = 0
-#             for n,v in enumerate(inst_map_vals[1:]):
-#                 inp[inst_map==v] += cur_max+cnt
-#                 cnt+=1
-#     return inp
+    inp = inp.to('cuda')
+    cur_max = inp.max()
+    # real gain would be if we knew which area we have to search for duplicates -> if we can get a mask from spatial augmenter for this maybe?
+    for i in inp.unique()[1:]:
+        inst_map = connected_components_labeling((inp==i).byte())
+        inst_map_vals = inst_map.unique()
+        if inst_map_vals.shape[0]==2:
+            continue
+        else:
+            cnt = 0
+            for n,v in enumerate(inst_map_vals[1:]):
+                inp[inst_map==v] += cur_max+cnt
+                cnt+=1
+    return inp
 
 # Test code for comparing speeds:
 
