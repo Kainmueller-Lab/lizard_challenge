@@ -265,7 +265,49 @@ def fix_mirror_padding(ann):
         remapped_ids[remapped_ids > 1] += current_max_id
         ann[remapped_ids > 1] = remapped_ids[remapped_ids > 1]
         current_max_id = np.amax(ann)
-    return ann
+    return ann   
+
+def fix_mirror_padding_gpu(inp):
+    """Deal with duplicated instances due to mirroring in interpolation
+    during shape augmentation (scale, rotation etc.).
+    Gpu version
+
+    code is for [H,W] tensor
+    """
+    
+    inp = inp.to('cuda')
+    cur_max = inp.max()
+    # real gain would be if we knew which area we have to search for duplicates -> if we can get a mask from spatial augmenter for this maybe?
+    for i in inp.unique()[1:]:
+        inst_map = connected_components_labeling((inp==i).byte())
+        inst_map_vals = inst_map.unique()
+        if inst_map_vals.shape[0]==2:
+            continue
+        else:
+            cnt = 0
+            for n,v in enumerate(inst_map_vals[1:]):
+                inp[inst_map==v] += cur_max+cnt
+                cnt+=1
+    return inp
+
+# Test code for comparing speeds:
+
+# y_train = torch.Tensor(Y_train.astype(np.float32))[...,0].to('cuda')
+
+# for img in y_train[:10]:
+#     padded = F.pad(img.unsqueeze(0), (20,20,20,20), 'reflect')
+#     res = fix_mirror_padding_gpu(padded[0])
+
+# # 222 ms ± 892 µs per loop (mean ± std. dev. of 3 runs, 1 loop each)
+    
+# y_train = torch.Tensor(Y_train.astype(np.float32))[...,0]
+
+# for img in y_train[:10]:
+
+#     padded = F.pad(img.unsqueeze(0), (20,20,20,20), 'reflect')
+#     res = fix_mirror_padding(padded[0].numpy().astype(np.int32))
+
+# # 541 ms ± 111 µs per loop (mean ± std. dev. of 3 runs, 1 loop each)
 
 def make_cpvs(gt_inst, device, background=0):
     # only works for batchsize = 1 and 2d
