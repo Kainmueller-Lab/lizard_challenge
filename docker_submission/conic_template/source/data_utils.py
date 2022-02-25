@@ -250,8 +250,10 @@ def make_ct(pred_class, instance_map):
     for instance in instance_map.unique():
         if instance==0:
             continue
-        ct = pred_class_tmp[:,instance_map==instance].sum(1)
-        ct = ct.argmax()
+        ct_t = pred_class_tmp[:,instance_map==instance].sum(1)
+        ct = ct_t.argmax()
+        if ct == 0:
+            ct = ct_t[1:].argmax()
         pred_ct[instance_map==instance] = ct
     # actually redo this for the center crop of the image
     ct_list = np.zeros(7)
@@ -270,7 +272,6 @@ def make_ct(pred_class, instance_map):
         "connective-tissue-cell": ct_list[6],
     }
     return pred_ct, pred_reg
-
 
 
 def instance_wise_connected_components(pred_inst, connectivity=2):
