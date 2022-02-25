@@ -252,8 +252,8 @@ def make_ct(pred_class, instance_map):
             continue
         ct_t = pred_class_tmp[:,instance_map==instance].sum(1)
         ct = ct_t.argmax()
-        if ct == 0:
-            ct = ct_t[1:].argmax()
+        #if ct == 0:
+        #    ct = ct_t[1:].argmax()
         pred_ct[instance_map==instance] = ct
     # actually redo this for the center crop of the image
     ct_list = np.zeros(7)
