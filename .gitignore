@@ -7,6 +7,10 @@
 /instance_seg
 /semantic_seg
 /EmbedSeg
+/samples
+/finetune
+/finetune_SWA
+/finetune_SWA2
 checkpoint_step_300000
 *.pyc
 *.dat
