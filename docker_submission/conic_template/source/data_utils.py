@@ -76,33 +76,165 @@ def make_instance_segmentation(prediction, fg_thresh=0.9, seed_thresh=0.9):
     labelling = watershed(ws_surface, markers, fg)
     return labelling, ws_surface
 
-def make_pseudolabel(raw, model, n_views, slow_aug):
+
+rgb_from_hed = np.array([[0.65, 0.70, 0.29],
+                         [0.07, 0.99, 0.11],
+                         [0.27, 0.57, 0.78]])
+hed_from_rgb = np.linalg.inv(rgb_from_hed)
+
+
+hed_t = torch.tensor(hed_from_rgb, dtype=torch.float)
+rgb_t = torch.tensor(rgb_from_hed, dtype=torch.float)
+
+def torch_rgb2hed(img, hed_t, e):
+    img = img.T
+    img = torch.clamp(img, min = e)
+    img = torch.log(img)/torch.log(e)
+    img = torch.matmul(img, hed_t)
+    return img.T
+
+def torch_hed2rgb(img, rgb_t, e):
+    e = -torch.log(e)
+    img = img.T
+    img = torch.matmul(-(img*e), rgb_t)
+    img = torch.exp(img)
+    img = torch.clamp(img, 0,1)
+    return img.T
+
+
+class Hed2Rgb(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.e = torch.tensor(1e-6)
+        self.rgb_t = rgb_t
+    
+    def forward(self, img):
+        r = img.device
+        if img.dim()==3:
+            return torch_hed2rgb(img, self.rgb_t.to(r), self.e.to(r))
+        else:
+            out = []
+            for i in img:
+                out.append(torch_hed2rgb(i, self.rgb_t.to(r), self.e.to(r)))
+            return torch.stack(out)
+
+class Rgb2Hed(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.e = torch.tensor(1e-6)
+        self.hed_t = hed_t
+    
+    def forward(self, img):
+        r = img.device
+        if img.dim()==3:
+            return torch_rgb2hed(img, self.hed_t.to(r), self.e.to(r))
+        else:
+            out = []
+            for i in img:
+                out.append(torch_rgb2hed(i, self.hed_t.to(r), self.e.to(r)))
+            return torch.stack(out)
+
+
+def linear_contrast(img, alpha, e):
+    return e + alpha*(img-e)
+
+class LinearContrast(torch.nn.Module):
+    '''
+    Based on Imgaug linear contrast
+
+    alpha: tuple of floats
+        e.g. (0.95,1.05)
+
+    per_channel: bool
+        whether to apply different augmentation per channel
+
+    e: float
+        should be the mean value of the transformed image (for HED transformed images, this is not really 0)
+    '''
+    def __init__(self, alpha, per_channel=True, e=.0):
+        super().__init__()
+        self.alpha = alpha 
+        self.s = (3,1,1) if per_channel else (1)        
+        self.e = torch.tensor(e)
+       
+
+    def forward(self, img):
+        if img.dim()==3:
+            a = torch.empty(self.s).uniform_(self.alpha[0], self.alpha[1]).to(img.device)
+            return linear_contrast(img, a, self.e.to(img.device))
+        else:
+            out = []
+            for i in img:
+                a = torch.empty(self.s).uniform_(self.alpha[0], self.alpha[1]).to(img.device)
+                out.append(linear_contrast(i, a, self.e.to(img.device)))
+            return torch.stack(out)
+
+def color_augmentations():
+    # taken from https://github.com/sthalles/SimCLR/blob/master/data_aug/contrastive_learning_dataset.py
+    """Return a set of data augmentation transformations as described in the SimCLR paper."""
+    HED_contrast = torch.nn.Sequential(
+                Rgb2Hed(),
+                LinearContrast(alpha=(0.9,1.1)),
+                Hed2Rgb())
+    data_transforms = torch.nn.Sequential(
+            HED_contrast
+    )
+    return data_transforms
+
+color_aug_fn = color_augmentations()
+
+def make_pseudolabel(raw, model, n_views, slow_aug, reduce='mean'):
     B,C,H,w = raw.shape
-    mask_list = []
-    out_list = []
+    ct_list = []
+    inst_list = []
+    cpv_list = []
     for b in range(B): 
-        tmp_out_list = []
-        tmp_mask_list = []
+        tmp_ct_list = []
+        tmp_inst_list = []
+        tmp_cpv_list = []
         for _ in range(n_views):
             # gen views
             slow_aug.interpolation='bilinear'
             view = slow_aug.forward_transform(raw[b].unsqueeze(0))
+            view = color_aug_fn(view)
             with torch.no_grad():
                 out = model(view)
             mask = torch.ones_like(out[:,-1:,:,:])
             slow_aug.interpolation='nearest'
             out_inv, aug_mask_inv = slow_aug.inverse_transform(out, mask)
-            tmp_out_list.append(out_inv*aug_mask_inv)
-            tmp_mask_list.append(aug_mask_inv)
-        out_slow = torch.stack(tmp_out_list).sum(0) # 1 x 3 x H x W
-        mask_slow = torch.stack(tmp_mask_list).sum(0) > 0 # 1 x 1 x H x W
-        n_out = torch.stack(tmp_mask_list).sum(0)
-        out_slow = mask_slow*out_slow/(n_out+1e-6)
-        out_list.append(out_slow)
-        mask_list.append(mask_slow)
-    out = torch.cat(out_list, dim=0)
-    mask = torch.cat(mask_list, dim=0)
-    return out, mask
+
+            cpv,_ = out_inv[:,:2].abs().max(1)
+            if reduce =='sum':
+                pred_3c = out_inv[:,2:5]
+                pred_ct = out_inv[:,5:]
+            else:
+                pred_3c = out_inv[:,2:5].softmax(1)
+                pred_ct = out_inv[:,5:].softmax(1)
+            tmp_inst_list.append(pred_3c*aug_mask_inv)
+            tmp_ct_list.append(pred_ct*aug_mask_inv)
+            tmp_cpv_list.append(cpv)
+        
+        if reduce =='max':
+            pred_inst,_ = torch.stack(tmp_inst_list).max(0) # 1 x 3 x H x W
+            pred_ct,_ = torch.stack(tmp_ct_list).max(0) # 1 x 3 x H x W
+            cpv = torch.stack(tmp_cpv_list).max(0) # 1 x 3 x H x W
+        elif reduce =='mean':
+            pred_inst = torch.stack(tmp_inst_list).mean(0) # 1 x 3 x H x W
+            pred_ct = torch.stack(tmp_ct_list).mean(0) # 1 x 3 x H x W
+            cpv = torch.stack(tmp_cpv_list).mean(0) # 1 x 3 x H x W
+        elif reduce =='sum':
+            pred_inst = torch.stack(tmp_inst_list).sum(0).softmax(1) # 1 x 3 x H x W
+            pred_ct = torch.stack(tmp_ct_list).sum(0).softmax(1) # 1 x 3 x H x W
+            cpv = torch.stack(tmp_cpv_list).sum(0) # 1 x 3 x H x W
+            
+        ct_list.append(pred_ct)
+        inst_list.append(pred_inst)
+        cpv_list.append(cpv)
+    ct = torch.cat(ct_list, dim=0)
+    inst = torch.cat(inst_list, dim=0)
+    cpv = torch.cat(cpv_list, dim=0)
+    return ct, inst, cpv
+
 
 def center_crop(t, croph, cropw):
     h,w = t.shape

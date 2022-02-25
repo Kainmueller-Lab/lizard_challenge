@@ -122,11 +122,9 @@ def run(
         raw /= raw.max()
         raw = raw.permute(0,3,1,2) # BHWC -> BCHW        
         with torch.no_grad():
-            out, _ = make_pseudolabel(raw, model, 20, augmenter)
-            pred_emb = out[:,:5]
-            pred_class = out[:,5:]
-            pred_emb_list.append(pred_emb[:,2:].softmax(1).squeeze().cpu().detach().numpy())
-            pred_class_list.append(pred_class.cpu().detach())
+            ct, inst, _ = make_pseudolabel(raw, model, 20, augmenter)
+            pred_emb_list.append(inst.squeeze().cpu().detach().numpy())
+            pred_class_list.append(ct.cpu().detach())
     
 
 
