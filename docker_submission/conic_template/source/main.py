@@ -53,7 +53,7 @@ def run(
     # >>>>>>>>>>>>>>>>>>>>>>>>>
     params = {'fg_thresh': 0.7,
               'seed_thresh': 0.3,
-              'best_obj_removal': 25
+              'best_obj_removal': 30
     }
     
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
