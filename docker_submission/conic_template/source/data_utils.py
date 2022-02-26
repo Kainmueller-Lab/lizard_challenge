@@ -1,6 +1,6 @@
 from torch.utils.data import Dataset
 import numpy as np
-import mahotas
+
 import scipy
 import logging
 import torch
@@ -43,27 +43,27 @@ class SliceDataset(Dataset):
         if self.labels is not None:
             return raw_tmp, self.labels[idx].astype(np.float32)
         else:
-            return raw_tmp, False
+            return torch.from_numpy(raw_tmp), False
 
 logger = logging.getLogger(__name__)
 
-def watershed(surface, markers, fg):
-    logger.info("labelling")
-    # compute watershed
-    ws = mahotas.cwatershed(surface, markers)
+# def watershed(surface, markers, fg):
+#     logger.info("labelling")
+#     # compute watershed
+#     ws = mahotas.cwatershed(surface, markers)
 
-    # write watershed directly
-    logger.debug("watershed output: %s %s %f %f",
-                 ws.shape, ws.dtype, ws.max(), ws.min())
+#     # write watershed directly
+#     logger.debug("watershed output: %s %s %f %f",
+#                  ws.shape, ws.dtype, ws.max(), ws.min())
 
-    # overlay fg and write
-    wsFG = ws * fg
-    logger.debug("watershed (foreground only): %s %s %f %f",
-                 wsFG.shape, wsFG.dtype, wsFG.max(),
-                 wsFG.min())
-    wsFGUI = wsFG.astype(np.uint16)
+#     # overlay fg and write
+#     wsFG = ws * fg
+#     logger.debug("watershed (foreground only): %s %s %f %f",
+#                  wsFG.shape, wsFG.dtype, wsFG.max(),
+#                  wsFG.min())
+#     wsFGUI = wsFG.astype(np.uint16)
 
-    return wsFGUI
+#     return wsFGUI
 
 def make_instance_segmentation(prediction, fg_thresh=0.9, seed_thresh=0.9):
     # prediction[0] = bg
@@ -73,7 +73,7 @@ def make_instance_segmentation(prediction, fg_thresh=0.9, seed_thresh=0.9):
     ws_surface = 1.0 - prediction[1, ...]
     seeds = (1 * (prediction[1, ...] > seed_thresh)).astype(np.uint8)
     markers, cnt = scipy.ndimage.label(seeds)
-    labelling = watershed(ws_surface, markers, fg)
+    labelling = None #watershed(ws_surface, markers, fg)
     return labelling, ws_surface
 
 

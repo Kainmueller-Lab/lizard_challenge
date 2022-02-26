@@ -7,7 +7,7 @@ LOCAL_OUTPUT="/home/buzzwoll/lizard_challenge/docker_submission/local_test/outpu
 
 # ! DO NOT MODIFY IF YOU ARE NOT CLEAR ABOUT DOCKER ENGINE
 # <<<<<<<<<<<<<<<<<<<<<<<<<
-./build.sh
+#./build.sh
 
 # https://grand-challenge.org/documentation/data-storage/
 # Docker Engine: this is different from the docker image to be run,

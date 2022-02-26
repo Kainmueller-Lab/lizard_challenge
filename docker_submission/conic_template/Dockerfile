@@ -3,7 +3,13 @@
 # Edit the base image here, e.g., to use 
 # TENSORFLOW (https://hub.docker.com/r/tensorflow/tensorflow/) 
 # or a different PYTORCH (https://hub.docker.com/r/pytorch/pytorch/) base image
-FROM pytorch/pytorch:1.9.1-cuda11.1-cudnn8-runtime
+
+# alternative 1.9.0-cuda10.2-cudnn7-runtime
+# 1.9.1-cuda11.1-cudnn8-runtime
+# nvcr.io/nvidia/pytorch:22.02-py3
+FROM nvcr.io/nvidia/pytorch:22.02-py3
+# FROM conic-inference
+ENV DEBIAN_FRONTEND noninteractive
 # For running opencv-python
 RUN apt-get update
 RUN apt-get install gcc ffmpeg libsm6 libxext6 openslide-tools -y
@@ -42,6 +48,9 @@ COPY --chown=algorithm:algorithm source/ /opt/algorithm/source/
 
 # Install required python packages via pip - you may adapt the requirements.txt to your needs
 RUN python -m pip install --user -r requirements.txt
+Run python -m pip install --user -e /opt/algorithm/source/PatchPerPix_private
+RUN python -m pip install --user --upgrade numpy
+RUN mkdir -p /home/algorithm/.local/lib/python3.8/site-packages/gunpowder/tensorflow2
 
 # Entrypoint to your python code - executes process.py as a script
 ENTRYPOINT python -m process $0 $@

@@ -1,4 +1,4 @@
-
+import subprocess
 import itk
 import numpy as np
 import torch
@@ -55,6 +55,12 @@ def run(
               'seed_thresh': 0.3,
               'best_obj_removal': 30
     }
+
+    # insert PPP
+    subprocess.run("python source/PatchPerPix_experiments_private/run_ppp.py --setup setup33 --config source/PatchPerPix_experiments_private/experiments/conic_setup33_220224_101416/config.toml --do decode label predict --app conic -id source/PatchPerPix_experiments_private/experiments/conic_setup33_220224_101416 --batched --checkpoint 50000 --no_gp_predict".split(" "))
+
+    ppp_pred_inst_ = np.load("pred_inst_ppp.npy")
+
     
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     dataset = SliceDataset(raw=images, labels=None)
@@ -113,6 +119,8 @@ def run(
         'shear': {'max_percent': 0.1, 'prob': 0.0},
         'elastic': {'alpha': [120,120], 'sigma': 8, 'prob': 0.0}
     }
+
+
     augmenter = SpatialAugmenter(aug_params).to(device)
     pred_emb_list = []
     pred_class_list = []
@@ -138,8 +146,9 @@ def run(
     }
     pred_list = []
 
-    for pred_3c, pred_class in tqdm(zip(pred_emb_list, pred_class_list)):
-        pred_inst, _ = make_instance_segmentation(pred_3c, fg_thresh=params['fg_thresh'], seed_thresh=params['seed_thresh'])
+    for ppp_pred_inst, pred_3c, pred_class in tqdm(zip(ppp_pred_inst_, pred_emb_list, pred_class_list)):
+        # pred_inst, _ = make_instance_segmentation(pred_3c, fg_thresh=params['fg_thresh'], seed_thresh=params['seed_thresh'])
+        pred_inst = ppp_pred_inst
         pred_inst = remove_big_objects(pred_inst, size=5000)
         pred_inst = remove_holes(pred_inst, max_hole_size=50)
         pred_inst = instance_wise_connected_components(pred_inst)
