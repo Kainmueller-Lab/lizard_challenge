@@ -51,17 +51,16 @@ def run(
     images = np.array(itk.imread(IMG_PATH))
     np.save("images.npy", images)
     # >>>>>>>>>>>>>>>>>>>>>>>>>
-    params = {'fg_thresh': 0.7,
-              'seed_thresh': 0.3,
-              'best_obj_removal': 30
+    params = {'fg_thresh': 0.6,
+              'seed_thresh': 0.4,
+              'best_obj_removal': 25
     }
     
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     dataset = SliceDataset(raw=images, labels=None)
-    print(f'{user_data_dir}/checkpoint_step_120000')
 
     encoder = smp.encoders.get_encoder(
-            name= "timm-efficientnet-b5",
+            name= "timm-efficientnet-b7",
             in_channels=3,
             depth=5,
             weights=None).to(device)
@@ -94,7 +93,7 @@ def run(
     decoders = [decoder_inst, decoder_ct]
     heads = [head_inst, head_ct]
     model = MultiHeadModel(encoder, decoders, heads)
-    state = torch.load(f'{user_data_dir}/checkpoint_step_120000')
+    state = torch.load(f'{user_data_dir}/best_model')
     model.load_state_dict(state['model_state_dict'])
 
 
@@ -140,7 +139,7 @@ def run(
 
     for pred_3c, pred_class in tqdm(zip(pred_emb_list, pred_class_list)):
         pred_inst, _ = make_instance_segmentation(pred_3c, fg_thresh=params['fg_thresh'], seed_thresh=params['seed_thresh'])
-        pred_inst = remove_big_objects(pred_inst, size=5000)
+        pred_inst = remove_big_objects(pred_inst, size=4000)
         pred_inst = remove_holes(pred_inst, max_hole_size=50)
         pred_inst = instance_wise_connected_components(pred_inst)
         pred_inst = remove_small_objects(pred_inst, int(params['best_obj_removal']))
