@@ -1,4 +1,4 @@
-base = "experiments/conic_setup33_220224_101416"
+base = "experiments/conic_setup33_220227_212242"
 
 [general]
 logging = 20
@@ -7,8 +7,9 @@ overwrite = false
 
 [data]
 train_data = "/home/peter/data/datasets/data_conic/lizard_zarr/train"
-val_data = "/home/peter/data/datasets/data_conic/lizard_zarr/val/patches"
-test_data = "images.npy"
+val_data = "experiments/conic_setup33_220227_212242/processed"
+test_data = "predictions.npy"
+# test_data = "images.npy"
 voxel_size = [ 1, 1,]
 input_format = "zarr"
 gt_key = "volumes/gt_instances"
@@ -21,7 +22,7 @@ train_net_name = "train_net"
 test_net_name = "test_net"
 train_input_shape = [ 256, 256,]
 test_input_shape = [ 256, 256,]
-patchshape = [ 1, 25, 25,]
+patchshape = [ 1, 17, 17,]
 patchstride = [ 1, 1, 1,]
 num_fmaps = 40
 fmap_inc_factors = [ 2, 2, 2, 2,]
@@ -32,16 +33,16 @@ padding = "same"
 kernel_size = 3
 num_repetitions = 2
 upsampling = "resize_conv"
-code_units = 256
+code_units = 144
 autoencoder_chkpt = "this"
-focal_class_loss = true
+class_loss = "focal"
 
 [autoencoder]
 train_net_name = "train_net"
 test_net_name = "test_net"
-train_input_shape = [ 1, 25, 25,]
-test_input_shape = [ 1, 25, 25,]
-patchshape = [ 1, 25, 25,]
+train_input_shape = [ 1, 17, 17,]
+test_input_shape = [ 1, 17, 17,]
+patchshape = [ 1, 17, 17,]
 patchstride = [ 1, 1, 1,]
 network_type = "conv"
 activation = "relu"
@@ -52,7 +53,7 @@ kernel_size = 3
 num_repetitions = 2
 padding = "same"
 code_method = "conv1x1_b"
-code_units = 256
+code_units = 144
 code_fmaps = 16
 code_activation = "sigmoid"
 regularizer = "l2"
@@ -71,9 +72,9 @@ clipmax = 1500
 batch_size = 4
 num_gpus = 1
 num_workers = 24
-cache_size = 60
-max_iterations = 100000
-checkpoints = 1000
+cache_size = 24
+max_iterations = 50000
+checkpoints = 2000
 snapshots = 500
 profiling = 100
 train_code = true
@@ -85,26 +86,24 @@ code_key = "volumes/pred_code"
 fg_key = "volumes/pred_fgbg"
 fg_thresh = 0.5
 decode_batch_size = 1024
-test_time_aug = false
 
 [validation]
 params_product = [ "mws", "fg_thresh_vi",]
 params_zip = [ "patch_threshold", "fc_threshold",]
-mws = [ true,]
-fg_thresh_vi = [ -1.0,]
-patch_threshold = [ 0.4, 0.5, 0.6, 0.7,]
-fc_threshold = [ 0.4, 0.5, 0.6, 0.7,]
-checkpoints = [ 50000,]
+mws = [ true, false,]
+fg_thresh_vi = [ 0.4, 0.5, -1.0,]
+patch_threshold = [ 0.95, 0.98, 0.99, 0.9,]
+fc_threshold = [ 0.95, 0.98, 0.99, 0.9,]
+checkpoints = [ 500000,]
 
 [vote_instances]
-patch_threshold = 0.65
-fc_threshold = 0.65
+patch_threshold = 0.6
+fc_threshold = 0.6
 cuda = true
 blockwise = false
 num_parallel_samples = 4
 num_parallel_blocks = 1
-num_workers = 8
-debug = false
+num_workers = 1
 select_patches_for_sparse_data = true
 save_no_intermediates = true
 output_format = "hdf"
@@ -147,7 +146,6 @@ shuffle_patches = false
 [evaluation]
 num_workers = 1
 res_key = "vote_instances"
-filterSz = 0
 metric = "confusion_matrix.th_0_5.avAP"
 print_f_factor_perc_gt_0_8 = false
 use_linear_sum_assignment = true

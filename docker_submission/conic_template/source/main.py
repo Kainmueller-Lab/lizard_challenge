@@ -50,24 +50,19 @@ def run(
     # convert from .mha to .npy
     images = np.array(itk.imread(IMG_PATH))
     np.save("images.npy", images)
-    # >>>>>>>>>>>>>>>>>>>>>>>>>
-    params = {'fg_thresh': 0.7,
-              'seed_thresh': 0.3,
-              'best_obj_removal': 30
-    }
 
-    # insert PPP
-    subprocess.run("python source/PatchPerPix_experiments_private/run_ppp.py --setup setup33 --config source/PatchPerPix_experiments_private/experiments/conic_setup33_220224_101416/config.toml --do decode label predict --app conic -id source/PatchPerPix_experiments_private/experiments/conic_setup33_220224_101416 --batched --checkpoint 50000 --no_gp_predict".split(" "))
 
-    ppp_pred_inst_ = np.load("pred_inst_ppp.npy")
-
-    
+    #################
+    # torch
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     dataset = SliceDataset(raw=images, labels=None)
-    print(f'{user_data_dir}/checkpoint_step_120000')
+    # print(f'{user_data_dir}/checkpoint_step_120000')
+    # print(f'{user_data_dir}/best_model')
+    # user_data_dir = sys.argv[1]
+    print(f'{user_data_dir}/checkpoint_step_100000')
 
     encoder = smp.encoders.get_encoder(
-            name= "timm-efficientnet-b5",
+            name= "timm-efficientnet-b7",
             in_channels=3,
             depth=5,
             weights=None).to(device)
@@ -100,7 +95,27 @@ def run(
     decoders = [decoder_inst, decoder_ct]
     heads = [head_inst, head_ct]
     model = MultiHeadModel(encoder, decoders, heads)
-    state = torch.load(f'{user_data_dir}/checkpoint_step_120000')
+
+    decoder_inst_PPP = UnetDecoder(
+                    encoder_channels=encoder.out_channels,
+                    decoder_channels=(256, 128, 128, 128, 128),
+                    n_blocks=5,
+                    use_batchnorm=True,
+                    center=False,
+                    attention_type=None
+                    ).to(device)
+    head_inst_PPP = smp.base.SegmentationHead(
+                in_channels = 128,
+                out_channels = 290,
+                activation=None,
+                kernel_size=1).to(device)
+
+    model.decoders[0] = decoder_inst_PPP
+    model.heads[0] = head_inst_PPP
+
+    # state = torch.load(f'{user_data_dir}/checkpoint_step_120000')
+    # state = torch.load(f'{user_data_dir}/best_model')
+    state = torch.load(f'{user_data_dir}/checkpoint_step_100000')
     model.load_state_dict(state['model_state_dict'])
 
 
@@ -124,17 +139,42 @@ def run(
     augmenter = SpatialAugmenter(aug_params).to(device)
     pred_emb_list = []
     pred_class_list = []
-    for raw, _ in tqdm(dataloader):
+    for idx, (raw, _) in enumerate(tqdm(dataloader)):
         raw = raw.to(device).float()
         raw = raw + raw.min() *-1
         raw /= raw.max()
-        raw = raw.permute(0,3,1,2) # BHWC -> BCHW        
+        raw = raw.permute(0,3,1,2) # BHWC -> BCHW
         with torch.no_grad():
-            ct, inst, _ = make_pseudolabel(raw, model, 20, augmenter)
-            pred_emb_list.append(inst.squeeze().cpu().detach().numpy())
-            pred_class_list.append(ct.cpu().detach())
-    
+            # ct, inst, _ = make_pseudolabel(raw, model, 20, augmenter)
+            with torch.no_grad():
+                out = model(raw)
+                fginst = out[:,:290]
+                ct = out[:,290:]
 
+            fginst = fginst.squeeze().cpu().detach().numpy()
+            ct = ct.cpu().detach().numpy()
+            np.save(f"predictions_{idx}.npy", fginst)
+            # np.save(f"predictions_class_{idx}.npy", ct)
+            # pred_emb_list.append()
+            pred_class_list.append(ct)
+
+    # pred_emb_list = np.array(pred_emb_list)
+    # pred_class_list = np.array(pred_class_list)
+    # print(pred_emb_list.shape, pred_class_list.shape)
+    # np.save("predictions.npy", pred_emb_list)
+    # np.save("predictions_class.npy", pred_class_list)
+    ##################
+
+
+    # subprocess.run(f"python source/main_torch.py {user_data_dir}".split(" "), stderr=subprocess.STDOUT)
+
+    # insert PPP
+    subprocess.run("python source/PatchPerPix_experiments_private/run_ppp.py --setup setup33 --config source/PatchPerPix_experiments_private/experiments/conic_setup33_220227_212242/config.toml --do label --app conic -id source/PatchPerPix_experiments_private/experiments/conic_setup33_220227_212242 --checkpoint 100000".split(" "), stderr=subprocess.STDOUT)
+
+    ppp_pred_inst_ = np.load("pred_inst_ppp.npy")
+    # pred_class_list = np.load("predictions_class.npy")
+    # pred_emb_list = np.load("predictions_class.npy")
+    pred_emb_list = pred_class_list
 
     pred_regression = {
         "neutrophil"            : [],
@@ -146,18 +186,20 @@ def run(
     }
     pred_list = []
 
-    for ppp_pred_inst, pred_3c, pred_class in tqdm(zip(ppp_pred_inst_, pred_emb_list, pred_class_list)):
+    for idx, (ppp_pred_inst, pred_3c, pred_class) in tqdm(enumerate(zip(ppp_pred_inst_, pred_emb_list, pred_class_list))):
+        print(idx, len(ppp_pred_inst_), len(pred_emb_list), len(pred_class_list))
         # pred_inst, _ = make_instance_segmentation(pred_3c, fg_thresh=params['fg_thresh'], seed_thresh=params['seed_thresh'])
         pred_inst = ppp_pred_inst
-        pred_inst = remove_big_objects(pred_inst, size=5000)
-        pred_inst = remove_holes(pred_inst, max_hole_size=50)
-        pred_inst = instance_wise_connected_components(pred_inst)
-        pred_inst = remove_small_objects(pred_inst, int(params['best_obj_removal']))
-        pred_inst = torch.tensor(pred_inst.astype(np.int32)).long()
+        # pred_inst = remove_big_objects(pred_inst, size=5000)
+        # pred_inst = remove_holes(pred_inst, max_hole_size=50)
+        # pred_inst = instance_wise_connected_components(pred_inst)
+        # pred_inst = remove_small_objects(pred_inst, int(params['best_obj_removal']))
+        # pred_inst = torch.tensor(pred_inst.astype(np.int32)).long()
         pred_ct, pred_reg = make_ct(pred_class, pred_inst)
         for key in pred_regression.keys():
             pred_regression[key].append(pred_reg[key])
-        pred_list.append(torch.stack([pred_inst, pred_ct], dim=-1).cpu().detach().numpy())
+        pred_list.append(
+            np.stack([pred_inst, pred_ct], axis=-1))
 
     # Valid predictions
     pred_segmentation = np.stack(pred_list, axis=0).astype(np.int32)

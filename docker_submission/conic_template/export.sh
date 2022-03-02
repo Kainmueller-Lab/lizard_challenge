@@ -2,4 +2,4 @@
 
 #./build.sh
 
-docker save conic-inference | gzip -c > conic-inference.tar.gz
+docker save conic-inference3 | gzip -c > conic-inference2.tar.gz

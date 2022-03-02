@@ -1,13 +1,14 @@
 
 # ! USER SPECIFIC
 # <<<<<<<<<<<<<<<<<<<<<<<<<
-LOCAL_INPUT="/home/buzzwoll/lizard_challenge/docker_submission/local_test/mha"
-LOCAL_OUTPUT="/home/buzzwoll/lizard_challenge/docker_submission/local_test/output"
+LOCAL_INPUT="/home/peter/Downloads/lizard_challenge/docker_submission/local_test/mha"
+LOCAL_OUTPUT="/home/peter/Downloads/lizard_challenge/docker_submission/local_test/output"
 # >>>>>>>>>>>>>>>>>>>>>>>>>
+
 
 # ! DO NOT MODIFY IF YOU ARE NOT CLEAR ABOUT DOCKER ENGINE
 # <<<<<<<<<<<<<<<<<<<<<<<<<
-#./build.sh
+./build.sh
 
 # https://grand-challenge.org/documentation/data-storage/
 # Docker Engine: this is different from the docker image to be run,
@@ -29,11 +30,22 @@ LOCAL_OUTPUT="/home/buzzwoll/lizard_challenge/docker_submission/local_test/outpu
 # After it finishes running, the docker image named `conic-inference` is removed.
 
 docker run \
-        --rm \
-        --gpus all \
-        --memory=32g \
-        --network none \
-        --mount src="$LOCAL_INPUT/",target=/input/,type=bind \
-        --mount src="$LOCAL_OUTPUT/",target=/output/,type=bind \
-        conic-inference
+       --rm \
+       --gpus device=2 \
+       --memory=15g \
+       --network none \
+       --mount src="$LOCAL_INPUT/",target=/input/,type=bind \
+       --mount src="$LOCAL_OUTPUT/",target=/output/,type=bind \
+       -it --entrypoint /bin/bash \
+       conic-inference
+
+# docker run \
+    #        --rm \
+    #        --gpus device=2 \
+    #        --memory=15g \
+    #        --network none \
+    #        --mount src="$LOCAL_INPUT/",target=/input/,type=bind \
+    #        --mount src="$LOCAL_OUTPUT/",target=/output/,type=bind \
+    #        conic-inference3
+
 # >>>>>>>>>>>>>>>>>>>>>>>>>

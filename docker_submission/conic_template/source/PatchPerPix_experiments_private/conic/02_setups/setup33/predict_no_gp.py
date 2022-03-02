@@ -53,14 +53,14 @@ def predict(**kwargs):
 
     print(samples)
     npy_source = False
-    if samples[0].endswith("npy"):
+    if len(samples) > 0 and samples[0].endswith("npy"):
         npy_source = True
         print("loading npy", samples)
         samples = samples[0]
         samples_data = np.load(samples)
         samples_data = np.ascontiguousarray(np.moveaxis(samples_data, -1, 1))
         print(samples_data.shape)
-        samples = ["patch_{}".format(idx) for idx in range(samples_data.shape[0])][:10]
+        samples = ["patch_{}".format(idx) for idx in range(samples_data.shape[0])]
 
     for idx, sample in enumerate(samples):
         # if idx > 10:

@@ -56,10 +56,10 @@ def work(mode, pred_path, true_path):
     if mode not in ["regression", "seg_class"]:
         raise ValueError("`mode` must be either `regression` or `seg_class`")
 
-    semantic = "lorenz"
-    # semantic = None
+    # semantic = "lorenz"
+    semantic = None
 
-    hacks = True
+    hacks = False
 
     all_metrics = {}
     if mode == "seg_class":
@@ -79,7 +79,7 @@ def work(mode, pred_path, true_path):
         # nr_patches = pred_array.shape[0]
         preds = os.listdir(pred_path)
         nr_patches = len(preds)
-        #nr_patches = 10
+        # nr_patches = 10
 
         if semantic == "lorenz":
             # preds_class = np.load("/home/peter/data/datasets/data_conic/pred_class_val_peter.npy")
@@ -118,6 +118,7 @@ def work(mode, pred_path, true_path):
             # print(label_path)
             label_path = os.path.join(label_path, preds[patch_idx])
             # print(label_path)
+            print(preds[patch_idx], label_path)
 
 
             if semantic == "lorenz":

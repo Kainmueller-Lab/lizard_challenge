@@ -7,12 +7,11 @@
 # alternative 1.9.0-cuda10.2-cudnn7-runtime
 # 1.9.1-cuda11.1-cudnn8-runtime
 # nvcr.io/nvidia/pytorch:22.02-py3
-FROM nvcr.io/nvidia/pytorch:22.02-py3
+FROM nvcr.io/nvidia/pytorch:21.10-py3
 # FROM conic-inference
 ENV DEBIAN_FRONTEND noninteractive
 # For running opencv-python
-RUN apt-get update
-RUN apt-get install gcc ffmpeg libsm6 libxext6 openslide-tools -y
+RUN apt-get update &&  apt-get install gcc ffmpeg libsm6 libxext6 openslide-tools -y
 
 # >>>>>>>>>>>>>>>>>>>>>>>>>
 
@@ -45,6 +44,8 @@ COPY --chown=algorithm:algorithm process.py /opt/algorithm/
 COPY --chown=algorithm:algorithm requirements.txt /opt/algorithm/
 COPY --chown=algorithm:algorithm data/ /opt/algorithm/data/
 COPY --chown=algorithm:algorithm source/ /opt/algorithm/source/
+COPY --chown=algorithm:algorithm nvidia_tensorflow-1.15.5+nv21.10-cp38-cp38-linux_x86_64.whl /opt/algorithm/
+
 
 # Install required python packages via pip - you may adapt the requirements.txt to your needs
 RUN python -m pip install --user -r requirements.txt

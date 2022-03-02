@@ -2,6 +2,7 @@ from torch.utils.data import Dataset
 import numpy as np
 
 import scipy
+import scipy.special
 import logging
 import torch
 
@@ -244,25 +245,45 @@ def center_crop(t, croph, cropw):
 
 
 def make_ct(pred_class, instance_map):
-    device = pred_class.device
-    pred_ct = torch.zeros_like(instance_map)
-    pred_class_tmp = pred_class.softmax(1).squeeze(0)
-    for instance in instance_map.unique():
+    # device = pred_class.device
+    pred_ct = np.zeros_like(instance_map)
+    # print(pred_class.shape)
+    pred_class_tmp = np.squeeze(scipy.special.softmax(pred_class, axis=1), axis=0)
+    pred_class_tmp2 = np.argmax(pred_class_tmp, axis=0)
+    # print(pred_class_tmp.shape)
+    # print(instance_map.unique().detach().cpu().numpy())
+    softmax = False
+    for instance in np.unique(instance_map):
         if instance==0:
             continue
-        ct_t = pred_class_tmp[:,instance_map==instance].sum(1)
-        ct = ct_t.argmax()
-        #if ct == 0:
-        #    ct = ct_t[1:].argmax()
+        if softmax:
+            ct_t = np.sum(pred_class_tmp[:,instance_map==instance], axis=1)
+            ct = np.argmax(ct_t)
+            # print(ct_t)
+            #if ct == 0:
+            #    ct = ct_t[1:].argmax()
+        else:
+            ids, cnts = np.unique(pred_class_tmp2[instance_map==instance],
+                                  return_counts=True)
+            if ids[0] == 0:
+                ids = ids[1:]
+                cnts = cnts[1:]
+            if len(ids) == 0:
+                ct_t = pred_class_tmp[:,instance_map==instance].sum(1)
+                ct = np.argmax(ct_t)
+                if ct == 0:
+                    ct = np.argmax(ct_t[1:])
+                # print(ct_t)
+            ct = ids[np.argmax(cnts)]
         pred_ct[instance_map==instance] = ct
     # actually redo this for the center crop of the image
     ct_list = np.zeros(7)
     instance_map_tmp = center_crop(instance_map, 224,224)
-    for instance in instance_map_tmp.unique():
+    for instance in np.unique(instance_map_tmp):
         if instance==0:
             continue
         ct_tmp = pred_ct[instance_map==instance]
-        ct_list[ct_tmp.detach().cpu().numpy()] += 1
+        ct_list[ct_tmp] += 1
     pred_reg = {
         "neutrophil"            : ct_list[1],
         "epithelial-cell"       : ct_list[2],

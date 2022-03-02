@@ -8,7 +8,7 @@ itk
 # mahotas
 segmentation_models_pytorch
 nvidia-pyindex
-nvidia-tensorflow
+nvidia_tensorflow-1.15.5+nv21.10-cp38-cp38-linux_x86_64.whl
 absl-py
 dask
 git+https://github.com/Kainmueller-Lab/evaluate-instance-segmentation.git@master#egg=evaluate-instance-segmentation

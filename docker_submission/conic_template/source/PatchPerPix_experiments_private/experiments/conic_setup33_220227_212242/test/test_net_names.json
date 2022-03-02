@@ -1,0 +1,1 @@
+{"raw": "raw:0", "raw_cropped": "Slice_4:0", "gt_affs": "gt_affs:0", "gt_fgbg": "gt_fgbg:0", "gt_class": "gt_class:0", "pred_code": "Sigmoid:0", "pred_class": "semantic_class:0", "pred_fgbg": "Sigmoid_1:0", "anchor": "anchor:0", "loss": "losses:0", "optimizer": "Adam", "summaries": "summaries/summaries:0"}

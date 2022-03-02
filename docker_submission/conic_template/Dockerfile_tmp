@@ -1,0 +1,9 @@
+FROM conic-inference
+
+WORKDIR /opt/algorithm
+
+ENV PATH="/home/algorithm/.local/bin:${PATH}"
+
+
+COPY --chown=algorithm:algorithm source/ /opt/algorithm/source/
+COPY --chown=algorithm:algorithm data/ /opt/algorithm/data/

@@ -954,9 +954,46 @@ def validate_checkpoints(args, config, data, checkpoints, train_folder,
 
 @time_func
 def vote_instances(args, config, data, pred_folder, output_folder):
-    samples = get_list_samples(config, pred_folder,
-                               config['prediction']['output_format'],
-                               data)
+    if data.endswith("npy"):
+        # preds = np.load(data)
+        # print(preds.shape)
+        # preds_fgbg = preds[:,0,...]
+        # preds_affs = preds[:,1:,...]
+        # print(preds_fgbg.shape)
+        # print(preds_affs.shape)
+        samples = []
+        fls = natsorted(os.listdir("."))
+        for fn in fls:
+            if "predictions_" not in fn or "class" in fn:
+                continue
+            pred = np.load(fn)
+            pred_fgbg = pred[0]
+            pred_affs = pred[1:]
+            i = int(os.path.splitext(fn.split("_")[-1])[0])
+            fn = os.path.join(
+                pred_folder,
+                "patch_{}.hdf".format(i))
+
+            # pred_fgbg = preds_fgbg[i]
+            # pred_affs = preds_affs[i]
+            print(fn, pred_fgbg.shape, pred_affs.shape)
+            if pred_fgbg.shape[0] != 1:
+                pred_fgbg = np.expand_dims(pred_fgbg, 0)
+            # if pred_affs.shape[1] != 1:
+                # pred_affs = np.expand_dims(pred_affs, 1)
+            print(fn, pred_fgbg.shape, pred_affs.shape)
+            os.makedirs(os.path.dirname(fn), exist_ok=True)
+            with h5py.File(fn, 'w') as f:
+                f.create_dataset("volumes/pred_affs",
+                                 data=pred_affs)
+                f.create_dataset("volumes/pred_fgbg",
+                                 data=pred_fgbg)
+            samples.append(os.path.splitext(os.path.basename(fn))[0])
+    else:
+        samples = get_list_samples(
+            config, pred_folder,
+            config['prediction']['output_format'],
+            data)
 
     if args.sample is not None:
         samples = [s for s in samples if args.sample in s]
@@ -1680,8 +1717,8 @@ def main():
     # update config with command line values
     update_config(args, config)
     # backup_and_copy_file(None, base, 'config.toml')
-    with open(os.path.join(base, "config.toml"), 'w') as f:
-        toml.dump(config, f)
+    # with open(os.path.join(base, "config.toml"), 'w') as f:
+    #     toml.dump(config, f)
     if args.debug_args:
         setDebugValuesForConfig(config)
     logger.info('used config: %s', config)
