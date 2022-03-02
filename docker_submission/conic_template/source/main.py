@@ -93,7 +93,7 @@ def run(
     decoders = [decoder_inst, decoder_ct]
     heads = [head_inst, head_ct]
     model = MultiHeadModel(encoder, decoders, heads)
-    state = torch.load(f'{user_data_dir}/best_model')
+    state = torch.load(f'{user_data_dir}/best_model_b7v3')
     model.load_state_dict(state['model_state_dict'])
 
 
@@ -101,8 +101,7 @@ def run(
     dataloader = DataLoader(dataset,
                         batch_size=1,
                         shuffle=False,
-                        prefetch_factor=2,
-                        num_workers=1)
+                        num_workers=0)
     aug_params = {
         'mirror': {'prob_x': 0.5, 'prob_y': 0.5, 'prob': 0.85},
         'translate': {'max_percent':0.05, 'prob': 0.0},
@@ -121,7 +120,7 @@ def run(
         raw /= raw.max()
         raw = raw.permute(0,3,1,2) # BHWC -> BCHW        
         with torch.no_grad():
-            ct, inst, _ = make_pseudolabel(raw, model, 20, augmenter)
+            ct, inst, _ = make_pseudolabel(raw, model, 16, augmenter)
             pred_emb_list.append(inst.squeeze().cpu().detach().numpy())
             pred_class_list.append(ct.cpu().detach())
     
