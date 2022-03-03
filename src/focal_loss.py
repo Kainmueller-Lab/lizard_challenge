@@ -5,7 +5,7 @@ class FocalCE(torch.nn.Module,):
     '''
     Focal Cross Entropy Loss with exponential moving average class weights
     '''
-    def __init__(self, num_classes, momentum=0.99, focal_p=3.0, reduction='mean', smoothing=0.05):
+    def __init__(self, num_classes, momentum=0.99, focal_p=3.0, reduction='mean', smoothing=0.05, ema=True):
         super(FocalCE, self).__init__()
         self.num_classes = num_classes
         self.running_conf = torch.ones(num_classes).float()/num_classes
@@ -13,19 +13,21 @@ class FocalCE(torch.nn.Module,):
         self.reduction = reduction
         self.focal_p = focal_p
         self.smoothing = smoothing
+        self.ema = ema
 
     def _update_running_conf(self, probs, tolerance=1e-8):
         """Maintain the moving class prior"""
         B,C,H,W = probs.size()
         probs_avg = probs.mean(0).view(C,-1).mean(-1)
 
-        # updating the new records: copy the value
-        new_index = probs_avg > tolerance
-        self.running_conf[new_index] = probs_avg[new_index]
-
-        # use the moving average for the rest
-        self.running_conf *= self.momentum
-        self.running_conf += (1 - self.momentum) * probs_avg
+        if self.ema:
+            # use the moving average for the rest
+            self.running_conf *= self.momentum
+            self.running_conf += (1 - self.momentum) * probs_avg
+        else:
+            # updating the new records: copy the value
+            new_index = probs_avg > tolerance
+            self.running_conf[new_index] = probs_avg[new_index]
     
     def _focal_ce(self, logits, target):
         focal_weight = (1 - self.running_conf.clamp(0.)) ** self.focal_p

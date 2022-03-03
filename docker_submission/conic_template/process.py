@@ -20,12 +20,12 @@ DOCKER_ENTRY = {
 # <<<<<<<<<<<<<<<<<<<<<<<<<
 LOCAL_ENTRY = {
     # path to folder that contain .mha for inference
-    "input_dir": "/home/buzzwoll/CoNIC/local_test/mha",
+    "input_dir": "/home/buzzwoll/lizard_challenge/docker_submission/local_test/mha",
     # path to folder that contain inference results
-    "output_dir": "/home/buzzwoll/CoNIC/local_test/output",
+    "output_dir": "/home/buzzwoll/lizard_challenge/docker_submission/local_test/output",
     # path to folder that contain user data such as
     # neural network weights and stain matrices
-    "user_data_dir": "/home/buzzwoll/CoNIC/conic_template/data"
+    "user_data_dir": "/home/buzzwoll/lizard_challenge/docker_submission/conic_template/data"
 }
 # >>>>>>>>>>>>>>>>>>>>>>>>>
 

@@ -6,6 +6,7 @@ import os
 import numpy as np
 from scipy.ndimage import measurements
 
+from .stain_mix import *
 
 def save_model(step, model, optimizer, loss, filename):
     torch.save({
@@ -45,6 +46,40 @@ def make_pseudolabel(raw, model, n_views, slow_aug):
     out = torch.cat(out_list, dim=0)
     mask = torch.cat(mask_list, dim=0)
     return out, mask
+
+
+def make_pseudolabel_wstain(raw, model, n_views, slow_aug, source_stain, target_stain):
+    B,C,H,w = raw.shape
+    mask_list = []
+    out_list = []
+    for b in range(B): 
+        tmp_out_list = []
+        tmp_mask_list = []
+        for _ in range(n_views):
+            # gen views
+            slow_aug.interpolation='bilinear'
+            raw = torch_stain_mixup(raw[b].unsqueeze(0), source_stain, target_stain, intensity_range=[0.95,1.05], alpha=.6)           
+            view = slow_aug.forward_transform(raw[b].unsqueeze(0))
+            with torch.no_grad():
+                out = model(view)
+                out = out[...,4:-4,4:-4]
+            mask = torch.ones_like(out[:,-1:,:,:])
+            slow_aug.interpolation='nearest'
+            out_inv, aug_mask_inv = slow_aug.inverse_transform(out, mask)
+            tmp_out_list.append(out_inv*aug_mask_inv)
+            tmp_mask_list.append(aug_mask_inv)
+        out_slow = torch.stack(tmp_out_list).sum(0) # 1 x 3 x H x W
+        mask_slow = torch.stack(tmp_mask_list).sum(0) > 0 # 1 x 1 x H x W
+        n_out = torch.stack(tmp_mask_list).sum(0)
+        out_slow = mask_slow*out_slow/(n_out+1e-6)
+        out_slow = F.pad(out_slow, (4,4,4,4))
+        mask_slow = F.pad(mask_slow, (4,4,4,4))
+        out_list.append(out_slow)
+        mask_list.append(mask_slow)
+    out = torch.cat(out_list, dim=0)
+    mask = torch.cat(mask_list, dim=0)
+    return out, mask
+
 
 def supervised_train_step(model, raw, gt, fast_aug, color_aug_fn, cutout_fn, cutout_prob, inst_lossfn, class_lossfn, writer, device, step):
     raw = raw.to(device).float()
@@ -116,6 +151,72 @@ def supervised_train_step(model, raw, gt, fast_aug, color_aug_fn, cutout_fn, cut
 #         loss += inpaint_loss
     return loss, pred_inst, pred_class.softmax(1),img_caug, gt_inst, gt_ct, cutout_maps
 
+def instance_seg_train_step(model, raw, gt, fast_aug, color_aug_fn, inst_lossfn, writer, device, step, inst_model='cpv_3c'):
+    raw = raw.to(device).float()
+    raw = raw + raw.min() *-1
+    raw /= raw.max()
+    gt = gt.to(device).float()
+    B,_,_,_ = raw.shape
+    if inst_model == 'cpv_3c':
+        gt_3c_list = []
+    raw_list = []
+    gt_inst_list = []
+    for b in range(B):
+        img = raw[b].permute(2,0,1).unsqueeze(0) # BHWC -> BCHW
+        gt_ = gt[b].permute(2,0,1).unsqueeze(0) # BHW2 -> B2HW
+        img_saug, gt_saug = fast_aug.forward_transform(img, gt_)                
+        #gt_inst = fix_mirror_padding(gt_saug[0,0].cpu().detach().numpy().astype(np.int32)) # slow af
+        #gt_inst = torch.tensor(gt_inst, device=device).float().unsqueeze(0)
+        gt_inst = gt_saug[:,0]
+        if inst_model == 'cpv_3c':
+            gt_3c = gt_saug[:,2]
+            gt_3c_list.append(gt_3c)
+        img_caug = color_aug_fn(img_saug)
+        raw_list.append(img_caug)
+        gt_inst_list.append(gt_inst)
+    img_caug = torch.cat(raw_list, axis = 0)
+    gt_inst  = torch.cat(gt_inst_list, axis = 0)
+    out_fast = model(img_caug)
+    _,_,H,W = out_fast.shape
+    gt_inst = center_crop(gt_inst.unsqueeze(0), H, W)
+    pred_inst = out_fast
+    if inst_model == 'cpv_3c':
+        gt_3c = torch.cat(gt_3c_list, axis = 0)
+        gt_3c = center_crop(gt_3c.unsqueeze(0), H, W)
+        instance_loss = inst_lossfn(pred_inst, gt_inst, gt_3c)
+    else:
+        instance_loss = inst_lossfn(pred_inst, gt_inst.squeeze(0).float(), (gt_inst.squeeze(0)>0).float())
+    writer.add_scalar('instance_loss', instance_loss, step)
+    print('loss', instance_loss.item())
+    return instance_loss, pred_inst,img_caug, gt_inst
+
+def instance_seg_validation(model, validation_dataloader, inst_lossfn, device, step, writer, inst_model='cpv_3c'):
+    val_loss = []
+    val_inst_loss = []
+    for raw, gt in validation_dataloader:
+        raw = raw.to(device)
+        raw = raw.float() + raw.min() *-1
+        raw /= raw.max()
+        gt = gt.to(device)
+        raw = raw.permute(0,3,1,2) # BHWC -> BCHW
+        gt = gt.permute(0,3,1,2) # BHW2 -> B2HW
+        with torch.no_grad():
+            out = model(raw)
+            b,c,h,w = out.shape
+            gt = center_crop(gt, h, w)
+            gt_inst = gt[:,0]
+            pred_inst = out
+            if inst_model == 'cpv_3c':
+                gt_3c = gt[:,2]
+                instance_loss = inst_lossfn(pred_inst, gt_inst.unsqueeze(0), gt_3c.unsqueeze(0))
+            else:
+                instance_loss = inst_lossfn(pred_inst, gt_inst.float(), (gt_inst>0).float())
+            val_loss.append(instance_loss.item())
+        val_new = np.mean(val_loss)
+        writer.add_scalar('val_loss', val_new, step)
+        print('Validation loss: ', val_new)
+        return val_new
+
 def semantic_seg_train_step(model, raw, gt, fast_aug, color_aug_fn, class_lossfn, writer, device, step):
     raw = raw.to(device).float()
     raw = raw + raw.min() *-1
@@ -139,9 +240,6 @@ def semantic_seg_train_step(model, raw, gt, fast_aug, color_aug_fn, class_lossfn
     gt_ct = center_crop(gt_ct.unsqueeze(0), H, W)
     pred_class = out_fast
     class_loss = class_lossfn(pred_class, gt_ct.long())
-    if torch.isnan(class_loss) or not torch.isfinite(class_loss):
-        class_loss = torch.tensor(0.0)
-    class_loss = class_loss
     writer.add_scalar('class_loss', class_loss, step)
     print('loss', class_loss.item())
     return class_loss, pred_class.softmax(1),img_caug, gt_ct

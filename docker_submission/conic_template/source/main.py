@@ -4,11 +4,13 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from .spatial_augmenter import SpatialAugmenter
-from .data_utils import SliceDataset, make_pseudolabel, make_instance_segmentation, make_ct
+from .data_utils import SliceDataset, make_pseudolabel, make_instance_segmentation, make_ct, instance_wise_connected_components, remove_big_objects,remove_holes
 from tqdm.auto import tqdm
 from .utils import print_dir, recur_find_ext, save_as_json
 from .multi_head_unet import *
 import segmentation_models_pytorch as smp
+
+from skimage.morphology import remove_small_objects
 
 def run(
         input_dir: str,
@@ -49,16 +51,16 @@ def run(
     images = np.array(itk.imread(IMG_PATH))
     np.save("images.npy", images)
     # >>>>>>>>>>>>>>>>>>>>>>>>>
-    params = {'fg_thresh': 0.7,
-              'seed_thresh': 0.5,
+    params = {'fg_thresh': 0.6,
+              'seed_thresh': 0.4,
+              'best_obj_removal': 25
     }
     
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     dataset = SliceDataset(raw=images, labels=None)
-    print(f'{user_data_dir}/checkpoint_step_120000')
 
     encoder = smp.encoders.get_encoder(
-            name= "timm-efficientnet-b5",
+            name= "timm-efficientnet-b7",
             in_channels=3,
             depth=5,
             weights=None).to(device)
@@ -91,7 +93,7 @@ def run(
     decoders = [decoder_inst, decoder_ct]
     heads = [head_inst, head_ct]
     model = MultiHeadModel(encoder, decoders, heads)
-    state = torch.load(f'{user_data_dir}/checkpoint_step_120000')
+    state = torch.load(f'{user_data_dir}/best_model_b7v3')
     model.load_state_dict(state['model_state_dict'])
 
 
@@ -99,8 +101,7 @@ def run(
     dataloader = DataLoader(dataset,
                         batch_size=1,
                         shuffle=False,
-                        prefetch_factor=2,
-                        num_workers=1)
+                        num_workers=0)
     aug_params = {
         'mirror': {'prob_x': 0.5, 'prob_y': 0.5, 'prob': 0.85},
         'translate': {'max_percent':0.05, 'prob': 0.0},
@@ -119,11 +120,9 @@ def run(
         raw /= raw.max()
         raw = raw.permute(0,3,1,2) # BHWC -> BCHW        
         with torch.no_grad():
-            out, _ = make_pseudolabel(raw, model, 20, augmenter)
-            pred_emb = out[:,:5]
-            pred_class = out[:,5:]
-            pred_emb_list.append(pred_emb[:,2:].softmax(1).squeeze().cpu().detach().numpy())
-            pred_class_list.append(pred_class.cpu().detach())
+            ct, inst, _ = make_pseudolabel(raw, model, 16, augmenter)
+            pred_emb_list.append(inst.squeeze().cpu().detach().numpy())
+            pred_class_list.append(ct.cpu().detach())
     
 
 
@@ -139,6 +138,10 @@ def run(
 
     for pred_3c, pred_class in tqdm(zip(pred_emb_list, pred_class_list)):
         pred_inst, _ = make_instance_segmentation(pred_3c, fg_thresh=params['fg_thresh'], seed_thresh=params['seed_thresh'])
+        pred_inst = remove_big_objects(pred_inst, size=4000)
+        pred_inst = remove_holes(pred_inst, max_hole_size=50)
+        pred_inst = instance_wise_connected_components(pred_inst)
+        pred_inst = remove_small_objects(pred_inst, int(params['best_obj_removal']))
         pred_inst = torch.tensor(pred_inst.astype(np.int32)).long()
         pred_ct, pred_reg = make_ct(pred_class, pred_inst)
         for key in pred_regression.keys():

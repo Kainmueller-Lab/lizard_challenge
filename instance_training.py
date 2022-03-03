@@ -18,7 +18,7 @@ from src.focal_loss import FocalCE
 from src.unet import UNet
 from src.multi_head_unet import UnetDecoder, MultiHeadModel
 from src.spatial_augmenter import SpatialAugmenter
-from src.train_utils import supervised_train_step, validation, save_snapshot, save_model, make_cpvs
+from src.train_utils import instance_seg_train_step, instance_seg_validation, save_snapshot, save_model, make_cpvs
 from src.data_utils import SliceDataset, CropDataset, color_augmentations, add_3c_gt
 #import torch_optimizer as optim
 
@@ -35,7 +35,7 @@ params = {
     'num_fmaps': 32,
     'fmap_inc_factors': 2,
     'downsample_factors': [ [ 2, 2,], [ 2, 2,], [ 2, 2,], [ 2, 2,],],
-    'num_fmaps_out': 12,
+    'num_fmaps_out': 5,
     'constant_upsample': False,
     'padding': 'same',
     'activation': 'ReLU',
@@ -43,9 +43,7 @@ params = {
     'learning_rate': 5e-4,
     'seed': 42,
     'num_validation': 500,
-    'cutout_prob':0.0,
     'checkpoint_path': None, # 'exp_0_dsb/best_model',
-    'cutout_or_RandomErasing': 'RandomErasing',
     'pretrained_model': True,
     'multi_head': True,
     'uniform_class_sampling': False,
@@ -53,8 +51,9 @@ params = {
     'validation_step' : 500,
     'snapshot_step' : 5000,
     'checkpoint_step': 20000,
-    'instance_seg': 'cpv_3c', # 'embedding' or 'cpv_3c'
-    'attention': True
+    'instance_seg': 'embedding', # 'embedding' or 'cpv_3c'
+    'attention': True,
+    'color_augmentation_s': 0.4
     }
 
 aug_params_fast = {
@@ -192,6 +191,7 @@ if params['pretrained_model']:
             encoder_weights="imagenet",     # use `imagenet` pre-trained weights for encoder initialization
             in_channels=3,                  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
             classes=params['num_fmaps_out'],                      # model output channels (number of classes in your dataset)
+            decoder_attention_type='scse' if params['attention'] else None,
             ).to(params['device'])
 #preprocess_input = smp.encoders.get_preprocessing_fn('efficientnet-b5', pretrained='imagenet')
 else:
@@ -209,22 +209,6 @@ if 'checkpoint_path' in params.keys() and params['checkpoint_path']:
     model.load_state_dict(torch.load(params['checkpoint_path'])['model_state_dict'])
 model = model.train()
 
-if 'cutout_or_RandomErasing' in params.keys() and params['cutout_or_RandomErasing'] == 'RandomErasing':
-    eraser = torch.nn.Sequential(
-        *[transforms.RandomErasing(p=1., scale=(0.001, 0.001), ratio=(0.3,1.3), inplace=False) for _ in range(200)])
-    def cutout(img):
-        B,C,_,_ = img.shape
-        device = img.device
-        img_list = []
-        mask_list = []
-        for b in range(B):
-            mask = eraser(torch.ones_like(img[b:b+1,...]).to(device))
-            img_masked = img[b:b+1,...] * mask.float()
-            mask = -1 * (mask-1)
-            img_list.append(img_masked) 
-            mask_list.append(mask)
-        return torch.cat(img_list, axis=0), torch.cat(mask_list, axis=0)
-
 # initialize optimizer, augmentations and summary writer
 if params['optimizer'] == 'SGD':
     optimizer = torch.optim.SGD(model.parameters(),
@@ -237,13 +221,7 @@ elif params['optimizer'] == 'AdamW':
                                   lr=params['learning_rate'],
                                   weight_decay=params['weight_decay'])
 
-# elif params['optimizer'] == 'AdaBound':
-#     optimizer = optim.AdaBound(model.parameters(),
-#                                lr=params['learning_rate'],
-#                                final_lr = 1e-5,
-#                                weight_decay=params['weight_decay'])
-
-#lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=params['training_steps'], eta_min=1e-5)
+lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=params['training_steps'], eta_min=5e-6)
 fast_aug = SpatialAugmenter(aug_params_fast)#, padding_mode='reflection')
 if params['instance_seg'] == 'embedding':
     inst_loss_fn = SpatialEmbLoss(n_sigma=2, to_center=False, foreground_weight=10, H=256,W=256).to(device)
@@ -260,9 +238,7 @@ elif params['instance_seg'] == 'cpv_3c':
                         weight=torch.tensor([1,1,2]).float().to(device))
         return loss_cpv + loss_3c
 
-ce_loss_fn = FocalCE(num_classes=7)
-
-def color_augmentations(size, s=0.2):
+def color_augmentations(size, s=0.5):
     # taken from https://github.com/sthalles/SimCLR/blob/master/data_aug/contrastive_learning_dataset.py
     """Return a set of data augmentation transformations as described in the SimCLR paper."""
     color_jitter = ColorJitter(0.8 * s, 0.0 * s, 0.8 * s, 0.2 * s) # brightness, contrast, saturation, hue
@@ -279,7 +255,7 @@ def color_augmentations(size, s=0.2):
         )
     return data_transforms
 
-color_aug_fn = color_augmentations(200, s=0.2)
+color_aug_fn = color_augmentations(200, s=params['color_augmentation_s'])
 validation_loss = []
 step = -1
 
@@ -290,29 +266,27 @@ def supervised_training(params):
         for raw, gt in tmp_loader:
             step += 1
             optimizer.zero_grad()
-            loss, pred_inst, pred_class ,img_caug, gt_inst, gt_ct, cutout_maps = supervised_train_step(model,
+            loss, pred_inst,img_caug, gt_inst = instance_seg_train_step(model,
                                                                 raw,
                                                                 gt,
                                                                 fast_aug,
                                                                 color_aug_fn,
-                                                                cutout,
-                                                                params['cutout_prob'],
                                                                 inst_loss_fn,
-                                                                ce_loss_fn,
                                                                 writer,
                                                                 device,
-                                                                step)
+                                                                step,
+                                                                inst_model=params['instance_seg'])
             loss.backward()
             optimizer.step()
             #lr_scheduler.step()
             if step % params['validation_step'] == 0:
-                val_new = validation(model,
+                val_new = instance_seg_validation(model,
                         validation_dataloader,
                         inst_loss_fn,
-                        ce_loss_fn,
                         device,
                         step,
-                        writer)
+                        writer,
+                        inst_model=params['instance_seg'])
                 validation_loss.append(val_new)
                 if val_new <= np.min(validation_loss):
                     print('Save best model')

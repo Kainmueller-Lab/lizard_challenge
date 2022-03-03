@@ -40,7 +40,7 @@ params = {
     'padding': 'same',
     'activation': 'ReLU',
     'weight_decay': 1e-5,
-    'learning_rate': 5e-4,
+    'learning_rate': 1e-4,
     'seed': 42,
     'num_validation': 500,
     'cutout_prob':0.0,
@@ -48,7 +48,7 @@ params = {
     'cutout_or_RandomErasing': 'RandomErasing',
     'pretrained_model': True,
     'multi_head': False,
-    'uniform_class_sampling': False,
+    'uniform_class_sampling': True,
     'optimizer': 'AdamW', # one of SGD AdamW AdaBound , Adahessian breaks memory and is not supported
     'validation_step' : 500,
     'snapshot_step' : 5000,
@@ -130,19 +130,19 @@ if params['uniform_class_sampling']:
                         batch_size=1,
                         prefetch_factor=4,
                         sampler=sampler,
-                        num_workers=6)
+                        num_workers=0)
 else:
     labeled_dataloader = DataLoader(labeled_dataset,
                         batch_size=params['batch_size'],
                         shuffle=True,
                         prefetch_factor=4,
-                        num_workers=6)
+                        num_workers=0)
 
 validation_dataloader = DataLoader(validation_dataset,
                     batch_size=1,
                     shuffle=True,
                     prefetch_factor=4,
-                    num_workers=1)
+                    num_workers=0)
 
 if params['pretrained_model']:
     if params['multi_head']:
@@ -188,6 +188,7 @@ if params['pretrained_model']:
             encoder_weights="imagenet",     # use `imagenet` pre-trained weights for encoder initialization
             in_channels=3,                  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
             classes=params['num_fmaps_out'],                      # model output channels (number of classes in your dataset)
+            decoder_attention_type='scse' if params['attention'] else None
             ).to(params['device'])
 #preprocess_input = smp.encoders.get_preprocessing_fn('efficientnet-b5', pretrained='imagenet')
 else:
@@ -221,7 +222,7 @@ lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=param
 fast_aug = SpatialAugmenter(aug_params_fast, padding_mode='reflection')
 ce_loss_fn = FocalCE(num_classes=7, focal_p=params['focal_p'])
 
-def color_augmentations(size, s=params['color_augmentation_s']):
+def color_augmentations(size, s=0.5):
     # taken from https://github.com/sthalles/SimCLR/blob/master/data_aug/contrastive_learning_dataset.py
     """Return a set of data augmentation transformations as described in the SimCLR paper."""
     color_jitter = ColorJitter(0.8 * s, 0.0 * s, 0.8 * s, 0.2 * s) # brightness, contrast, saturation, hue
@@ -238,7 +239,7 @@ def color_augmentations(size, s=params['color_augmentation_s']):
         )
     return data_transforms
 
-color_aug_fn = color_augmentations(200, s=0.4)
+color_aug_fn = color_augmentations(200, s=params['color_augmentation_s'])
 validation_loss = []
 step = -1
 
@@ -249,7 +250,7 @@ def supervised_training(params):
         for raw, gt in tmp_loader:
             step += 1
             optimizer.zero_grad()
-            loss, pred_inst, pred_class ,img_caug, gt_inst, gt_ct = semantic_seg_train_step(model,
+            loss, pred_class ,img_caug, gt_ct = semantic_seg_train_step(model,
                                                                 raw,
                                                                 gt,
                                                                 fast_aug,
@@ -258,6 +259,8 @@ def supervised_training(params):
                                                                 writer,
                                                                 device,
                                                                 step)
+            if torch.isnan(loss) or not torch.isfinite(loss):
+                continue
             loss.backward()
             optimizer.step()
             #lr_scheduler.step()
@@ -278,21 +281,7 @@ def supervised_training(params):
                 tmp_dic = {
                         'pred_ct': pred_class[0].cpu().detach().numpy(),
                         'img_caug': img_caug[0].squeeze(0).cpu().detach().numpy(),
-                        'gt_inst': gt_inst.squeeze(0).cpu().detach().numpy()[:1],
                         'gt_ct': gt_ct.squeeze(0).cpu().detach().numpy()[:1]}
-                if params['instance_seg'] == 'embedding':
-                    _,_,h,w = pred_inst.shape
-                    xym_s = inst_loss_fn.xym[:, 0:h, 0:w].contiguous()
-                    spatial_emb = pred_inst[0, 0:2] + xym_s  # 2 x h x w
-                    sigma = pred_inst[0, 2:2+inst_loss_fn.n_sigma]  # n_sigma x h x w
-                    seed_map = torch.sigmoid(
-                        pred_inst[0, 2+inst_loss_fn.n_sigma:2+inst_loss_fn.n_sigma + 1])  # 1 x h x w
-                    tmp_dic['embedding'] = spatial_emb.cpu().detach().numpy()
-                    tmp_dic['sigma'] = sigma.cpu().detach().numpy()
-                    tmp_dic['seed_map'] = seed_map.cpu().detach().numpy()
-                elif params['instance_seg'] == 'cpv_3c':
-                    tmp_dic['pred_cpv'] = pred_inst[0,:2].cpu().detach().numpy()
-                    tmp_dic['pred_3c'] = pred_inst[0,2:].softmax(0).cpu().detach().numpy()
                 save_snapshot(snap_dir, tmp_dic, step)
             if step % params['checkpoint_step'] == 0:
                 save_model(step, model, optimizer, loss, os.path.join(log_dir,"checkpoint_step_"+str(step)))    

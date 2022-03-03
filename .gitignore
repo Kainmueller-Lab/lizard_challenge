@@ -4,6 +4,13 @@
 /uniform_MH_attention
 /uniform_MH_attention_finetune
 /.ipynb_checkpoints
+/instance_seg
+/semantic_seg
+/EmbedSeg
+/samples
+/finetune
+/finetune_SWA
+/finetune_SWA2
 checkpoint_step_300000
 *.pyc
 *.dat
