@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from .spatial_augmenter import SpatialAugmenter
-from .data_utils import SliceDataset, make_pseudolabel, make_instance_segmentation, make_ct, instance_wise_connected_components, remove_big_objects,remove_holes
+from .data_utils import SliceDataset, make_pseudolabel_ensemble, make_instance_segmentation_cl, make_ct, instance_wise_connected_components, remove_holes, remove_objects_class
 from tqdm.auto import tqdm
 from .utils import print_dir, recur_find_ext, save_as_json
 from .multi_head_unet import *
@@ -51,19 +51,18 @@ def run(
     images = np.array(itk.imread(IMG_PATH))
     np.save("images.npy", images)
     # >>>>>>>>>>>>>>>>>>>>>>>>>
-    params = {'fg_thresh': 0.6,
-              'seed_thresh': 0.4,
-              'best_obj_removal': 25
+    params = {'checkpoint_path': 'best_model_b7v1',
+              'ensemble_path': 'best_model_l2v1',
     }
     
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     dataset = SliceDataset(raw=images, labels=None)
 
     encoder = smp.encoders.get_encoder(
-            name= "timm-efficientnet-b7",
-            in_channels=3,
-            depth=5,
-            weights=None).to(device)
+        name= "timm-efficientnet-l2",
+        in_channels=3,
+        depth=5,
+        weights=None).to(device)
     decoder_channels = (256, 128, 64, 32, 16)
     decoder_inst = UnetDecoder(
                 encoder_channels=encoder.out_channels,
@@ -71,14 +70,14 @@ def run(
                 n_blocks=5,
                 use_batchnorm=True,
                 center=False,
-                attention_type=None).to(device)
+                ).to(device)
     decoder_ct = UnetDecoder(
                 encoder_channels=encoder.out_channels,
                 decoder_channels=decoder_channels,
                 n_blocks=5,
                 use_batchnorm=True,
                 center=False,
-                attention_type=None).to(device)
+                ).to(device)
     head_inst = smp.base.SegmentationHead(
                 in_channels=decoder_channels[-1],
                 out_channels=5,
@@ -93,16 +92,57 @@ def run(
     decoders = [decoder_inst, decoder_ct]
     heads = [head_inst, head_ct]
     model = MultiHeadModel(encoder, decoders, heads)
-    state = torch.load(f'{user_data_dir}/best_model_b7v3')
+    
+    state = torch.load(f'{user_data_dir}/{params["ensemble_path"]}')
     model.load_state_dict(state['model_state_dict'])
-
-
     model = model.to(device).train() # MC Dropout
+    
+
+    encoder2 = smp.encoders.get_encoder(
+        name= "timm-efficientnet-b7",
+        in_channels=3,
+        depth=5,
+        weights=None).to(device)
+    decoder_channels = (256, 128, 64, 32, 16)
+    decoder_inst2 = UnetDecoder(
+                encoder_channels=encoder2.out_channels,
+                decoder_channels=decoder_channels,
+                n_blocks=5,
+                use_batchnorm=True,
+                center=False,
+                ).to(device)
+    decoder_ct2 = UnetDecoder(
+                encoder_channels=encoder2.out_channels,
+                decoder_channels=decoder_channels,
+                n_blocks=5,
+                use_batchnorm=True,
+                center=False,
+                ).to(device)
+    head_inst2 = smp.base.SegmentationHead(
+                in_channels=decoder_channels[-1],
+                out_channels=5,
+                activation=None,
+                kernel_size=1).to(device)
+    head_ct2 = smp.base.SegmentationHead(
+                in_channels=decoder_channels[-1],
+                out_channels=7,
+                activation=None,
+                kernel_size=1).to(device)
+ 
+    decoders2 = [decoder_inst2, decoder_ct2]
+    heads2 = [head_inst2, head_ct2]
+    model2 = MultiHeadModel(encoder2, decoders2, heads2)
+    state2 = torch.load(f'{user_data_dir}/{params["checkpoint_path"]}')
+    model2.load_state_dict(state2['model_state_dict'])
+    model2 = model2.to(device).train()
+
+
+    
     dataloader = DataLoader(dataset,
                         batch_size=1,
                         shuffle=False,
                         num_workers=0)
-    aug_params = {
+    aug_params_slow = {
         'mirror': {'prob_x': 0.5, 'prob_y': 0.5, 'prob': 0.85},
         'translate': {'max_percent':0.05, 'prob': 0.0},
         'scale': {'min': 0.8, 'max':1.2, 'prob': 0.0},
@@ -111,20 +151,23 @@ def run(
         'shear': {'max_percent': 0.1, 'prob': 0.0},
         'elastic': {'alpha': [120,120], 'sigma': 8, 'prob': 0.0}
     }
-    augmenter = SpatialAugmenter(aug_params).to(device)
+    slow_aug = SpatialAugmenter(aug_params_slow).to(device)
+    
     pred_emb_list = []
     pred_class_list = []
+        
+    i = 0
     for raw, _ in tqdm(dataloader):
         raw = raw.to(device).float()
         raw = raw + raw.min() *-1
         raw /= raw.max()
-        raw = raw.permute(0,3,1,2) # BHWC -> BCHW        
+        raw = raw.permute(0,3,1,2) # BHWC -> BCHW
+        i += 1
         with torch.no_grad():
-            ct, inst, _ = make_pseudolabel(raw, model, 16, augmenter)
-            pred_emb_list.append(inst.squeeze().cpu().detach().numpy())
-            pred_class_list.append(ct.cpu().detach())
-    
-
+            pred_ct, pred_inst = make_pseudolabel_ensemble(raw, model, model2, 5, slow_aug, skip=0)
+            pred_emb_list.append(pred_inst.squeeze().cpu().detach().numpy())
+            pred_class_list.append(pred_ct.cpu().detach())
+        
 
     pred_regression = {
         "neutrophil"            : [],
@@ -136,19 +179,23 @@ def run(
     }
     pred_list = []
 
+    best_min_threshs = [30, 30, 20, 20, 45, 30]
+    best_max_threshs = [650, 3000, 600, 400, 600, 1200]
+    best_fg_thresh_cl = [0.47, 0.57, 0.62, 0.64, 0.52, 0.49]
+    best_seed_thresh_cl = [0.24, 0.48, 0.42, 0.58, 0.72, 0.28]
+    best_solidity_thresh = [0.86, 0.79, 0.83, 0.8, 0.81, 0.79]
+
     for pred_3c, pred_class in tqdm(zip(pred_emb_list, pred_class_list)):
-        pred_inst, _ = make_instance_segmentation(pred_3c, fg_thresh=params['fg_thresh'], seed_thresh=params['seed_thresh'])
-        pred_inst = remove_big_objects(pred_inst, size=4000)
+        pred_inst, _ = make_instance_segmentation_cl(pred_3c, np.argmax(np.squeeze(pred_class.numpy())[1:],axis=0), fg_thresh_cl=best_fg_thresh_cl, seed_thresh_cl=best_seed_thresh_cl)
         pred_inst = remove_holes(pred_inst, max_hole_size=50)
         pred_inst = instance_wise_connected_components(pred_inst)
-        pred_inst = remove_small_objects(pred_inst, int(params['best_obj_removal']))
         pred_inst = torch.tensor(pred_inst.astype(np.int32)).long()
         pred_ct, pred_reg = make_ct(pred_class, pred_inst)
+        pred_inst, pred_ct = remove_objects_class(pred_inst, pred_ct, best_min_threshs, best_max_threshs, best_solidity_thresh)
         for key in pred_regression.keys():
             pred_regression[key].append(pred_reg[key])
         pred_list.append(torch.stack([pred_inst, pred_ct], dim=-1).cpu().detach().numpy())
-
-    # Valid predictions
+    
     pred_segmentation = np.stack(pred_list, axis=0).astype(np.int32)
     for key in pred_regression.keys():
         pred_regression[key] = np.array(pred_regression[key])

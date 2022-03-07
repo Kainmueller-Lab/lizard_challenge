@@ -6,7 +6,7 @@ import logging
 import torch
 
 from skimage.measure import label
-from skimage.morphology import remove_small_holes
+from skimage.morphology import remove_small_holes, remove_small_objects, convex_hull_image
 
 def normalize_percentile(x, pmin=3, pmax=99.8, axis=None, clip=False,
                          eps=1e-8, dtype=np.float32):
@@ -65,14 +65,17 @@ def watershed(surface, markers, fg):
 
     return wsFGUI
 
-def make_instance_segmentation(prediction, fg_thresh=0.9, seed_thresh=0.9):
+def make_instance_segmentation_cl(prediction, pred_semantic, fg_thresh_cl, seed_thresh_cl):
     # prediction[0] = bg
     # prediction[1] = inside
     # prediction[2] = boundary
-    fg = 1.0 * ((1.0 - prediction[0, ...]) > fg_thresh)
+    fg = 0*prediction[0, ...]
     ws_surface = 1.0 - prediction[1, ...]
-    seeds = (1 * (prediction[1, ...] > seed_thresh)).astype(np.uint8)
-    markers, cnt = scipy.ndimage.label(seeds)
+    seeds = fg.copy().astype(np.uint8)
+    for cl in range(len(fg_thresh_cl)):
+        fg = fg + 1.0 * ((1.0 - prediction[0, ...])*(pred_semantic==cl) > fg_thresh_cl[cl])
+        seeds = seeds + (1 * (prediction[1, ...] > seed_thresh_cl[cl])*(pred_semantic==cl)).astype(np.uint8)
+    markers, cnt = scipy.ndimage.label(1*(seeds>0))
     labelling = watershed(ws_surface, markers, fg)
     return labelling, ws_surface
 
@@ -183,15 +186,13 @@ def color_augmentations():
 
 color_aug_fn = color_augmentations()
 
-def make_pseudolabel(raw, model, n_views, slow_aug, reduce='mean'):
+def make_pseudolabel_ensemble(raw, model, model2, n_views, slow_aug, reduce='mean', skip=0):
     B,C,H,w = raw.shape
     ct_list = []
     inst_list = []
-    cpv_list = []
     for b in range(B): 
         tmp_ct_list = []
         tmp_inst_list = []
-        tmp_cpv_list = []
         for _ in range(n_views):
             # gen views
             slow_aug.interpolation='bilinear'
@@ -199,41 +200,39 @@ def make_pseudolabel(raw, model, n_views, slow_aug, reduce='mean'):
             view = color_aug_fn(view)
             with torch.no_grad():
                 out = model(view)
-            mask = torch.ones_like(out[:,-1:,:,:])
+                out2 = model2(view)
+            # mask = torch.ones_like(out[:,-1:,:,:])
             slow_aug.interpolation='nearest'
-            out_inv, aug_mask_inv = slow_aug.inverse_transform(out, mask)
-
-            cpv,_ = out_inv[:,:2].abs().max(1)
-            if reduce =='sum':
-                pred_3c = out_inv[:,2:5]
-                pred_ct = out_inv[:,5:]
-            else:
-                pred_3c = out_inv[:,2:5].softmax(1)
-                pred_ct = out_inv[:,5:].softmax(1)
-            tmp_inst_list.append(pred_3c*aug_mask_inv)
-            tmp_ct_list.append(pred_ct*aug_mask_inv)
-            tmp_cpv_list.append(cpv)
-        
-        if reduce =='max':
-            pred_inst,_ = torch.stack(tmp_inst_list).max(0) # 1 x 3 x H x W
-            pred_ct,_ = torch.stack(tmp_ct_list).max(0) # 1 x 3 x H x W
-            cpv = torch.stack(tmp_cpv_list).max(0) # 1 x 3 x H x W
-        elif reduce =='mean':
-            pred_inst = torch.stack(tmp_inst_list).mean(0) # 1 x 3 x H x W
-            pred_ct = torch.stack(tmp_ct_list).mean(0) # 1 x 3 x H x W
-            cpv = torch.stack(tmp_cpv_list).mean(0) # 1 x 3 x H x W
-        elif reduce =='sum':
-            pred_inst = torch.stack(tmp_inst_list).sum(0).softmax(1) # 1 x 3 x H x W
-            pred_ct = torch.stack(tmp_ct_list).sum(0).softmax(1) # 1 x 3 x H x W
-            cpv = torch.stack(tmp_cpv_list).sum(0) # 1 x 3 x H x W
+            out_inv = slow_aug.inverse_transform(out)
+            out_inv2 = slow_aug.inverse_transform(out2)
+ 
+            pred_3c = out_inv[:,2:5].softmax(1)
+            pred_ct = out_inv[:,5:].softmax(1)
+            pred_3c2 = out_inv2[:,2:5].softmax(1)
+            pred_ct2 = out_inv2[:,5:].softmax(1)
+ 
+            tmp_inst_list.append(pred_3c)
+            tmp_ct_list.append(pred_ct)
             
+            tmp_inst_list.append(pred_3c2)
+            tmp_ct_list.append(pred_ct2)
+            
+ 
+        if reduce =='max':
+            pred_inst,_ = torch.stack(tmp_inst_list[skip:]).max(0) # 1 x 3 x H x W
+            pred_ct,_ = torch.stack(tmp_ct_list[skip:]).max(0) # 1 x 3 x H x W
+        elif reduce =='mean':
+            pred_inst = torch.stack(tmp_inst_list[skip:]).mean(0) # 1 x 3 x H x W
+            pred_ct = torch.stack(tmp_ct_list[skip:]).mean(0) # 1 x 3 x H x W
+        elif reduce =='sum':
+            pred_inst = torch.stack(tmp_inst_list[skip:]).sum(0).softmax(1) # 1 x 3 x H x W
+            pred_ct = torch.stack(tmp_ct_list[skip:]).sum(0).softmax(1) # 1 x 3 x H x W
+ 
         ct_list.append(pred_ct)
         inst_list.append(pred_inst)
-        cpv_list.append(cpv)
     ct = torch.cat(ct_list, dim=0)
     inst = torch.cat(inst_list, dim=0)
-    cpv = torch.cat(cpv_list, dim=0)
-    return ct, inst, cpv
+    return ct, inst
 
 
 def center_crop(t, croph, cropw):
@@ -241,7 +240,6 @@ def center_crop(t, croph, cropw):
     startw = w//2-(cropw//2)
     starth = h//2-(croph//2)
     return t[starth:starth+croph,startw:startw+cropw]
-
 
 def make_ct(pred_class, instance_map):
     device = pred_class.device
@@ -252,8 +250,8 @@ def make_ct(pred_class, instance_map):
             continue
         ct_t = pred_class_tmp[:,instance_map==instance].sum(1)
         ct = ct_t.argmax()
-        #if ct == 0:
-        #    ct = ct_t[1:].argmax()
+        if ct == 0:
+            ct = ct_t[1:].argmax()
         pred_ct[instance_map==instance] = ct
     # actually redo this for the center crop of the image
     ct_list = np.zeros(7)
@@ -276,23 +274,16 @@ def make_ct(pred_class, instance_map):
 
 def instance_wise_connected_components(pred_inst, connectivity=2):
     out = np.zeros_like(pred_inst)
-    i = np.max(pred_inst)
+    i = np.max(pred_inst)+1
     for j in np.unique(pred_inst):
         if j ==0:
             continue
         relabeled = label(pred_inst==j, background=0, connectivity=connectivity)
-        first = True
         for new_lab in np.unique(relabeled):
             if new_lab == 0:
                 continue
-            if first:
-                out[relabeled==new_lab] = j
-                first = False
-            if np.sum(relabeled==new_lab)>40:
-                out[relabeled==new_lab] = i
-                i += 1
-            else:
-                out[relabeled==new_lab] = j
+            out[relabeled==new_lab] = i
+            i += 1
     return out
 
 def remove_big_objects(pred_inst, size):
@@ -300,7 +291,7 @@ def remove_big_objects(pred_inst, size):
         if i == 0:
             continue
         if np.sum(pred_inst==i)>size:
-            print('Remove instance '+str(i)+' of size '+str(np.sum(pred_inst==i)))
+            #print('Remove instance '+str(i)+' of size '+str(np.sum(pred_inst==i)))
             pred_inst[pred_inst==i] = 0
     return pred_inst
 
@@ -311,3 +302,55 @@ def remove_holes(pred_inst, max_hole_size):
             continue
         out += remove_small_holes(pred_inst==i, max_hole_size)*i
     return out
+
+def solidity_hull(pred_inst, threshold, max_size):
+    out_inst = pred_inst
+    for i in np.unique(pred_inst):
+        if i == 0:
+            continue
+        hull = convex_hull_image(pred_inst==i)
+        solidity = (pred_inst==i).float().sum() / hull.sum()
+        if solidity < threshold and hull.sum()<max_size:
+            out_inst[hull>0] = i
+    return out_inst
+
+def solidity_drop(pred_inst, threshold):
+    out_inst = pred_inst
+    for i in np.unique(pred_inst):
+        if i == 0:
+            continue
+        hull = convex_hull_image(pred_inst==i)
+        solidity = (pred_inst==i).astype(np.float32).sum() / hull.sum()
+        if solidity < threshold:
+            out_inst[hull>0] = 0
+    return out_inst
+
+def filter_objects(pred_inst, class_min, class_max, solidity_min):
+    out_inst = pred_inst
+    for i in np.unique(pred_inst):
+        if i==0:
+            continue
+        area = np.sum(pred_inst==i)
+        # remove small and big
+        if (area>class_max):
+            out_inst[out_inst==i]=0
+            continue
+        # remove solidity
+        hull = convex_hull_image(pred_inst==i).sum()
+        if (area.astype(np.float32)/hull)<solidity_min:
+            out_inst[hull>0] =0
+    return out_inst
+
+def remove_objects_class(pred_inst, pred_class, class_min, class_max, solidity_min):
+    classes = [1,2,3,4,5,6]
+    out_inst = np.zeros_like(pred_inst)
+    out_class = np.zeros_like(pred_class)
+    for class_ in classes:
+        if class_ in pred_class:
+            pred_inst_tmp = pred_inst * (pred_class==class_).int()
+            pred_inst_tmp = remove_big_objects(pred_inst_tmp.numpy(), class_max[class_-1])
+            pred_inst_tmp = remove_small_objects(pred_inst_tmp, class_min[class_-1])
+            pred_inst_tmp = solidity_drop(pred_inst_tmp, solidity_min[class_-1])
+            out_inst += pred_inst_tmp
+            out_class[pred_inst_tmp>0] = pred_class[pred_inst_tmp>0]
+    return torch.tensor(out_inst), torch.tensor(out_class)
