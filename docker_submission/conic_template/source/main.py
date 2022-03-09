@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from .spatial_augmenter import SpatialAugmenter
-from .data_utils import SliceDataset, make_pseudolabel, make_instance_segmentation, make_ct, instance_wise_connected_components, remove_big_objects,remove_holes
+from .data_utils import SliceDataset, make_pseudolabel, make_instance_segmentation_cl, make_ct,make_reg, instance_wise_connected_components, remove_objects_class,remove_holes
 from tqdm.auto import tqdm
 from .utils import print_dir, recur_find_ext, save_as_json
 from .multi_head_unet import *
@@ -51,9 +51,7 @@ def run(
     images = np.array(itk.imread(IMG_PATH))
     np.save("images.npy", images)
     # >>>>>>>>>>>>>>>>>>>>>>>>>
-    params = {'fg_thresh': 0.6,
-              'seed_thresh': 0.4,
-              'best_obj_removal': 25
+    params = {'checkpoint_path': 'best_model_b7v1',
     }
     
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -93,8 +91,10 @@ def run(
     decoders = [decoder_inst, decoder_ct]
     heads = [head_inst, head_ct]
     model = MultiHeadModel(encoder, decoders, heads)
-    state = torch.load(f'{user_data_dir}/best_model_b7v3')
+    state = torch.load(f'{user_data_dir}/{params["checkpoint_path"]}')
     model.load_state_dict(state['model_state_dict'])
+    print(state['step'])
+        
 
 
     model = model.to(device).train() # MC Dropout
@@ -120,12 +120,19 @@ def run(
         raw /= raw.max()
         raw = raw.permute(0,3,1,2) # BHWC -> BCHW        
         with torch.no_grad():
-            ct, inst, _ = make_pseudolabel(raw, model, 16, augmenter)
+            ct, inst = make_pseudolabel(raw, model, 10, augmenter)
             pred_emb_list.append(inst.squeeze().cpu().detach().numpy())
             pred_class_list.append(ct.cpu().detach())
     
 
 
+    best_fg_thresh_cl = [0.59, 0.62, 0.70, 0.43, 0.74, 0.57] 
+    best_seed_thresh_cl = [0.45, 0.43, 0.80, 0.45, 0.79, 0.72]
+    best_min_threshs = [30, 20, 30, 18, 25, 18]
+    best_max_threshs = [650, 3000, 600, 400, 600, 1200]
+    best_solidity_thresh = [0.5, 0.5, 0.84, 0.79, 0.7, 0.63]
+
+    pred_list = []
     pred_regression = {
         "neutrophil"            : [],
         "epithelial-cell"       : [],
@@ -134,19 +141,20 @@ def run(
         "eosinophil"            : [],
         "connective-tissue-cell": [],
     }
-    pred_list = []
-
     for pred_3c, pred_class in tqdm(zip(pred_emb_list, pred_class_list)):
-        pred_inst, _ = make_instance_segmentation(pred_3c, fg_thresh=params['fg_thresh'], seed_thresh=params['seed_thresh'])
-        pred_inst = remove_big_objects(pred_inst, size=4000)
+        pred_inst, _ = make_instance_segmentation_cl(pred_3c, np.argmax(np.squeeze(pred_class.numpy())[1:],axis=0), fg_thresh_cl=best_fg_thresh_cl, seed_thresh_cl=best_seed_thresh_cl)
         pred_inst = remove_holes(pred_inst, max_hole_size=50)
         pred_inst = instance_wise_connected_components(pred_inst)
-        pred_inst = remove_small_objects(pred_inst, int(params['best_obj_removal']))
         pred_inst = torch.tensor(pred_inst.astype(np.int32)).long()
-        pred_ct, pred_reg = make_ct(pred_class, pred_inst)
+        pred_ct = make_ct(pred_class, pred_inst)
+        pred_inst, pred_ct = remove_objects_class(pred_inst, pred_ct, best_min_threshs, best_max_threshs, best_solidity_thresh)
+        pred_reg = make_reg(pred_ct, pred_inst)
         for key in pred_regression.keys():
             pred_regression[key].append(pred_reg[key])
         pred_list.append(torch.stack([pred_inst, pred_ct], dim=-1).cpu().detach().numpy())
+
+    for key in pred_regression.keys():
+        pred_regression[key] = np.array(pred_regression[key])
 
     # Valid predictions
     pred_segmentation = np.stack(pred_list, axis=0).astype(np.int32)
